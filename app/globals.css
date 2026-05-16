@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #fdf8f0;
+    --foreground: #1a1a1a;
+  }
+
+  .dark {
+    --background: #0f0f0f;
+    --foreground: #f5f0e8;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+}
+
+@layer components {
+  .tree-line {
+    @apply absolute left-4 top-8 bottom-0 w-px bg-neutral-300 dark:bg-neutral-700;
+  }
+
+  .source-card-academic {
+    @apply border-l-4 border-l-blue-400 dark:border-l-blue-500;
+  }
+
+  .source-card-web {
+    @apply border-l-4 border-l-green-400 dark:border-l-green-500;
+  }
+
+  .prose-research h1 {
+    @apply font-serif text-2xl font-bold mt-8 mb-4 text-neutral-900 dark:text-warm-100;
+  }
+
+  .prose-research h2 {
+    @apply font-serif text-xl font-semibold mt-6 mb-3 text-neutral-800 dark:text-warm-200;
+  }
+
+  .prose-research h3 {
+    @apply font-serif text-lg font-medium mt-4 mb-2 text-neutral-700 dark:text-warm-300;
+  }
+
+  .prose-research p {
+    @apply mb-4 leading-relaxed text-neutral-700 dark:text-neutral-300;
+  }
+
+  .prose-research ul, .prose-research ol {
+    @apply mb-4 pl-6 space-y-1;
+  }
+
+  .prose-research li {
+    @apply text-neutral-700 dark:text-neutral-300;
+  }
+
+  .prose-research strong {
+    @apply font-semibold text-neutral-900 dark:text-neutral-100;
+  }
+
+  .prose-research a {
+    @apply text-blue-600 dark:text-blue-400 underline hover:no-underline;
+  }
+
+  .prose-research blockquote {
+    @apply border-l-4 border-neutral-300 dark:border-neutral-600 pl-4 italic text-neutral-600 dark:text-neutral-400 my-4;
+  }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
