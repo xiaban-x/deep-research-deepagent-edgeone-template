@@ -2,17 +2,19 @@
  * Deep Research Orchestrator
  *
  * Coordinates the research pipeline using EdgeOne Pages platform features:
- * - context.agents.invoke() — calls sub-agents (/decompose, /search-lit, /search-web, /synthesize)
+ * - context.agents.invoke() — calls sub-agents (/decompose, /search-lit, /search-web)
+ * - model.stream() — real-time streaming for synthesize stage
  * - context.store — persists conversation history (Memory API)
  * - @edgeone/pages-blob — archives completed reports
  *
- * Pipeline: Decompose → [HITL Approval] → Search (parallel) → Synthesize → Archive
+ * Pipeline: Decompose → [HITL Approval] → Search (parallel) → Synthesize (streaming) → Archive
  *
  * NOTE: After modifying agent files, run `rm -rf .edgeone/agent-node && edgeone dev`
  * to force rebuild the agent bundle.
  */
 import { getStore } from '@edgeone/pages-blob';
-import { createLogger, createSSEResponse, sseEvent } from './_shared';
+import { createModel, createLogger, createSSEResponse, sseEvent } from './_shared';
+import { HumanMessage } from '@langchain/core/messages';
 
 const logger = createLogger('research');
 
@@ -113,21 +115,49 @@ export async function onRequest(context: any) {
             if (signal?.aborted) return;
 
             // ═══════════════════════════════════════════════════════════
-            // Stage 4: Synthesize (via context.agents.invoke)
+            // Stage 4: Synthesize (streaming via model.stream)
             // ═══════════════════════════════════════════════════════════
             yield sseEvent({ type: 'subagent_lifecycle', status: 'running', agent: 'synthesizer', id: 'stage-4' });
             yield sseEvent({ type: 'source_switch', agent: 'synthesizer' });
             yield sseEvent({ type: 'progress', step: 3, total: 4, label: 'Synthesizing research report...' });
 
-            const synthResult = await agents.invoke('/synthesize', { question, subQuestions, papers, articles });
-            report = synthResult?.report || '';
+            const SYNTH_SYSTEM = `You are a research report writer. Compile a comprehensive, well-structured research report using ALL provided materials.
 
-            // Stream report in chunks for progressive rendering
-            if (report) {
-                const chunkSize = 150;
-                for (let i = 0; i < report.length; i += chunkSize) {
-                    if (signal?.aborted) break;
-                    yield sseEvent({ type: 'ai_response', content: report.slice(i, i + chunkSize), agent: 'synthesizer' });
+Format requirements:
+- Markdown with ## for main sections, ### for subsections
+- Include inline citations like [1], [2] referencing the sources
+- Structure: Executive Summary → Background → Key Findings → Analysis → Future Directions → Conclusion → References
+- Academic but accessible tone
+- All major findings must be supported by citations
+- Include a "References" section at the end listing all cited sources
+- Write in the same language as the original research question
+- Be thorough — use all provided papers and articles as references`;
+
+            const synthMessage = `Original research question: "${question}"
+
+Sub-questions investigated:
+${(subQuestions || []).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')}
+
+Academic papers found (cite as [1], [2], etc.):
+${JSON.stringify(papers || [], null, 2)}
+
+Web articles found (cite continuing from last paper number):
+${JSON.stringify(articles || [], null, 2)}
+
+Write a comprehensive research report in markdown. Include ALL citations. Be thorough and detailed.`;
+
+            const model = createModel();
+            const stream = await model.stream([
+                { role: 'system', content: SYNTH_SYSTEM },
+                new HumanMessage(synthMessage),
+            ]);
+
+            for await (const chunk of stream) {
+                if (signal?.aborted) break;
+                const text = typeof chunk.content === 'string' ? chunk.content : '';
+                if (text) {
+                    report += text;
+                    yield sseEvent({ type: 'ai_response', content: text, agent: 'synthesizer' });
                 }
             }
 

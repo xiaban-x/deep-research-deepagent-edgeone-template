@@ -201,13 +201,15 @@ export default function Home() {
                   try {
                     const parsed = JSON.parse(event.content);
                     if (Array.isArray(parsed)) {
-                      const newSources: Source[] = parsed.map((item: any) => {
-                        citationCounter++;
-                        if (item.doi || item.journal) {
-                          return { type: 'academic' as const, citationNumber: citationCounter, ...item };
-                        }
-                        return { type: 'web' as const, citationNumber: citationCounter, ...item };
-                      });
+                      const newSources: Source[] = parsed
+                        .filter((item: any) => item.title && item.title.trim())
+                        .map((item: any) => {
+                          citationCounter++;
+                          if (item.doi || item.journal) {
+                            return { type: 'academic' as const, citationNumber: citationCounter, ...item };
+                          }
+                          return { type: 'web' as const, citationNumber: citationCounter, ...item };
+                        });
                       setSources(prev => [...prev, ...newSources]);
                     }
                   } catch {}

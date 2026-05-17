@@ -11,16 +11,19 @@ interface SourceCardProps {
 export function SourceCard({ source }: SourceCardProps) {
   const { t } = useI18n();
   const isAcademic = source.type === 'academic';
+  const href = isAcademic
+    ? (source.doi ? `https://doi.org/${source.doi}` : undefined)
+    : source.url;
 
-  return (
-    <div className={`p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 ${isAcademic ? 'source-card-academic' : 'source-card-web'}`}>
+  const content = (
+    <div className={`p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 ${href ? 'hover:border-neutral-400 dark:hover:border-neutral-600 transition-colors cursor-pointer' : ''} ${isAcademic ? 'source-card-academic' : 'source-card-web'}`}>
       <div className="flex items-start gap-2">
         <span className="flex-shrink-0 w-6 h-6 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center text-xs font-mono font-bold text-neutral-600 dark:text-neutral-400">
           {source.citationNumber}
         </span>
         <div className="flex-1 min-w-0">
           <h4 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 line-clamp-2">
-            {source.title}
+            {source.title || '(Untitled)'}
           </h4>
 
           {isAcademic ? (
@@ -58,4 +61,14 @@ export function SourceCard({ source }: SourceCardProps) {
       </div>
     </div>
   );
+
+  if (href) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className="block no-underline">
+        {content}
+      </a>
+    );
+  }
+
+  return content;
 }

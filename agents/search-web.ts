@@ -162,6 +162,9 @@ export async function onRequest(context: any) {
 
         if (articles.length === 0) articles = searchResults;
 
+        // Filter out empty/invalid entries
+        articles = articles.filter((a: any) => a.title && a.title.trim());
+
         logger.log(`Found ${articles.length} articles`);
         return new Response(JSON.stringify({ articles }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     } catch (e) {
