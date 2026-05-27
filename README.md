@@ -1,95 +1,90 @@
 # Deep Research Agent
 
-Multi-agent powered deep research assistant with human-in-the-loop approval, parallel sub-agent invocation, and persistent memory. Built on EdgeOne Pages platform with deepagents framework integration.
+Multi-agent powered deep research assistant built on EdgeOne Makes platform. Features human-in-the-loop sub-question confirmation, real-time web & academic search, iterative report generation with auto-continuation, and project-based version management.
 
 ## Features
 
-- **Multi-Stage Research Pipeline** — Decompose → Search (parallel) → Synthesize
-- **Real Web Search** — DuckDuckGo HTML search via Sandbox or runtime fetch
-- **Real Academic Search** — CrossRef API + Semantic Scholar with structured paper data
-- **Sandbox Integration** — Remote code execution via `context.sandbox.commands.run()`
-- **Human-in-the-Loop** — AI generates sub-questions, user reviews and edits before proceeding
-- **Parallel Sub-Agent Invocation** — Literature and web search run simultaneously via `context.agents.invoke()`
-- **Persistent Memory** — Conversation history saved via EdgeOne Pages Memory API
-- **Research Archive** — Completed reports stored in Blob storage for later retrieval
-- **Research History** — Browse and reload past research reports
-- **Depth Control** — Quick (2-3 min), Standard (5-7 min), Deep (10+ min)
-- **Real-time Streaming** — SSE with progress indicators and stage lifecycle events
+- **Two-Phase Research** — AI decomposes question → User confirms/edits sub-questions → Full research proceeds
+- **Real Web Search** — Built-in `web_search` tool (primary) + Bing/DuckDuckGo via Sandbox (fallback)
+- **Real Academic Search** — CrossRef API + Semantic Scholar with structured paper metadata
+- **Auto-Continuation** — If model output is cut short, automatically retries up to 15 times to complete the report
+- **Structure Check** — Post-generation cleanup removes duplicate sections and fixes formatting
+- **Incremental Editing** — Follow-up research preserves existing report structure, only modifies requested sections
+- **Project & Version Management** — Create projects, auto-save versions, compare diffs between versions
+- **Follow-up Chat** — Conversational interface to discuss report, suggest edits, add sources (persisted to Blob)
+- **Paper Management** — AI detects when user mentions new papers and offers to add them to the source list
+- **Real-time Streaming** — SSE with progress indicators for each research stage
+- **URL Scraping** — Scrape user-provided URLs and integrate content into research
 - **i18n** — Chinese and English interface
-- **Graceful Fallback** — Sandbox → runtime fetch → mock data (3-layer fault tolerance)
+- **Dark Mode** — Full dark mode support
+- **Fixed Sidebar** — Project list stays visible while scrolling main content
 
 ## Tech Stack
 
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| Frontend | Next.js 16 + React 19 | App Router, Turbopack |
-| Styling | Tailwind CSS 3.4 | Dark mode support |
-| Agent Framework | deepagents 1.9+ | Used in `/search` endpoint with tool calling + middleware |
-| LLM Integration | LangChain.js (`@langchain/openai`) | ChatOpenAI for sub-agents |
-| Platform | EdgeOne Pages | Cloud Functions, Memory API, Blob Storage, Sandbox, Agent Invoke |
-| Language | TypeScript 5.6 | ESM modules |
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js + React 19 (App Router) |
+| Styling | Tailwind CSS |
+| Agent Framework | OpenAI Agents SDK (`@openai/agents`) |
+| LLM | `@makers/deepseek-v4-flash` (hardcoded) via EdgeOne AI Gateway |
+| Platform | EdgeOne Makes (Cloud Functions, Blob Storage, Sandbox, Tools) |
+| Web Search | `context.tools.get('web_search')` built-in tool |
+| Markdown | react-markdown + remark-gfm (tables, strikethrough) |
 
 ## Architecture
 
 ```
-┌─────────── Frontend ──────────────────────────────────────┐
-│ ResearchForm → POST /research (SSE)                       │
-│ ApprovalCard → POST /approve → POST /research (resume)    │
-│ ProgressTree ← subagent_lifecycle events                  │
-│ SourcesPanel ← parsed from stage completions              │
-│ ReportView   ← ai_response stream from synthesizer       │
-└───────────────────────────────────────────────────────────┘
+┌─────────── Frontend (Next.js) ─────────────────────────────┐
+│ ResearchForm → depth selection + question input             │
+│ SubQuestionConfirm → editable sub-question list (HITL)     │
+│ ProgressTree ← stage lifecycle events (collapsible)        │
+│ SourcesPanel ← academic/web sources with tabs              │
+│ ReportView ← streaming markdown with GFM tables           │
+│ FollowUpChat → discuss, suggest edits, add sources         │
+│ VersionSelector → browse versions, compare diffs           │
+│ ProjectSelector → fixed sidebar, full-height project list  │
+└────────────────────────────────────────────────────────────┘
 
-┌─────────── Orchestrator (/research) ─────────────────────┐
-│ context.agents.invoke('/decompose')                       │
-│   → HITL pause (emit hitl_request, wait for /approve)    │
-│ Promise.all([                                            │
-│   context.agents.invoke('/search-lit'),                   │
-│   context.agents.invoke('/search-web'),                   │
-│ ])                                                        │
-│ context.agents.invoke('/synthesize')                      │
-│ context.store.appendMessage() → Memory                    │
-│ blobStore.setJSON() → Archive                            │
-└───────────────────────────────────────────────────────────┘
-
-┌─────────── Sub-Agents ────────────────────────────────────┐
-│ /decompose   — Breaks question into sub-questions         │
-│ /search-lit  — Real academic search (CrossRef + Semantic Scholar) │
-│ /search-web  — Real web search (DuckDuckGo via Sandbox/fetch)    │
-│ /synthesize  — Compiles full research report              │
-│ /search      — Standalone deepagents search (tool calling)│
-│ /approve     — HITL approval endpoint                     │
-│ /history     — Research history CRUD (Blob)               │
-│ /stop        — Cancel active research                     │
-│ /health      — Health check                               │
-└───────────────────────────────────────────────────────────┘
+┌─────────── Backend (Cloud Functions) ──────────────────────┐
+│ /research  — Main research pipeline (single agent, tools)  │
+│   Phase 1: decomposeOnly → return sub-questions for HITL   │
+│   Phase 2: confirmedSubQuestions → search + synthesize      │
+│   Auto-continuation loop (up to 15 retries)                │
+│   Post-generation structure check & cleanup                │
+│ /chat     — Follow-up conversation (lightweight agent)     │
+│ /project  — Project CRUD + version + chat history (Blob)   │
+│ /scrape   — URL content extraction (browser_fetch tool)    │
+│ /stop     — Cancel active research run                     │
+│ /health   — Health check                                   │
+└────────────────────────────────────────────────────────────┘
 ```
 
-## EdgeOne Pages Platform Features Used
+## Research Flow
+
+```
+1. User enters question + selects depth (Quick/Standard/Deep)
+2. POST /research (decomposeOnly=true) → generates sub-questions
+3. Frontend shows SubQuestionConfirm → user edits/confirms
+4. POST /research (confirmedSubQuestions=[...]) → full research
+5. Agent calls search_literature (CrossRef + Semantic Scholar)
+6. Agent calls search_web (web_search tool + fallbacks)
+7. Agent writes report (streaming via SSE)
+8. Auto-continuation if report incomplete (checks for conclusion + references)
+9. Structure check: removes duplicate sections, fixes formatting
+10. Frontend saves version to /project → version list updates
+11. User can continue research via FollowUpChat (chat persisted to Blob)
+```
+
+## EdgeOne Makes Platform Features Used
 
 | Feature | Usage |
 |---------|-------|
-| `context.agents.invoke()` | Orchestrator calls 4 sub-agents (decompose, search-lit, search-web, synthesize) |
-| `Promise.all` + `agents.invoke` | Parallel execution of literature + web search |
-| `context.sandbox.commands.run()` | Execute shell commands (curl) in remote sandbox for web scraping |
-| `context.store` (Memory API) | Save user questions and AI reports to conversation history |
-| `context.conversation_id` | Automatic session association across requests |
-| `@edgeone/pages-blob` | Archive completed research reports for later retrieval |
-| `context.tracer` | Observability spans (when available) |
-| `context.utils.abortActiveRun()` | Graceful cancellation via /stop endpoint |
+| `context.tools.get('web_search')` | Built-in web search tool (primary strategy) |
+| `context.tools.get('browser_fetch')` | URL scraping with real Chromium |
+| `context.sandbox.commands.run()` | Shell commands for curl-based search fallback |
+| `@edgeone/pages-blob` | Project storage, version management, chat history |
 | Cloud Functions (`agents/` dir) | Each .ts file auto-maps to an HTTP endpoint |
-
-## deepagents Features Used
-
-| Feature | Location | Purpose |
-|---------|----------|---------|
-| `createDeepAgent()` | `/search` | Autonomous agent with tool selection |
-| Tool Calling (Zod) | `/search` | `search_academic`, `search_web`, `synthesize` tools |
-| `modelRetryMiddleware` | `/search` | Auto-retry on model failures (max 3) |
-| `modelCallLimitMiddleware` | `/search` | Prevent infinite loops (max 30 rounds) |
-| `toolRetryMiddleware` | `/search` | Retry failed tools (max 2) |
-| `toolCallLimitMiddleware` | `/search` | Per-tool call limits (max 10 each) |
-| `streamMode: 'messages'` | `/search` | Stream tool events + AI responses |
+| AI Gateway | LLM access via `@makers/deepseek-v4-flash` |
 
 ## Quick Start
 
@@ -101,11 +96,11 @@ npm install
 cp .env.example .env
 # Edit .env with your AI Gateway credentials
 
-# Start development (requires EdgeOne CLI)
-edgeone dev
+# Start development
+edgeone makes dev
 
-# IMPORTANT: After modifying agent files, force rebuild:
-rm -rf .edgeone/agent-node && edgeone dev
+# After modifying agent files, force rebuild:
+rm -rf .edgeone/agent-node && edgeone makes dev
 ```
 
 ## Environment Variables
@@ -114,80 +109,60 @@ rm -rf .edgeone/agent-node && edgeone dev
 |----------|----------|-------------|
 | `AI_GATEWAY_API_KEY` | Yes | AI Gateway API key |
 | `AI_GATEWAY_BASE_URL` | Yes | AI Gateway base URL |
-| `AI_MODEL` | No | Model name (default: `@makers/deepseek-v4-flash`) |
-| `PROJECT_ID` | No | Pages project ID for Blob/Sandbox (auto-injected on EdgeOne Pages) |
-| `EDGEONE_PAGES_API_TOKEN` | No | API token for Blob/Sandbox access (auto-injected on EdgeOne Pages) |
-| `SANDBOX_API_BASE` | No | Sandbox API endpoint (default: auto-resolved by platform) |
 
-## Research Flow
-
-```
-1. User enters research question + selects depth
-2. POST /research → Orchestrator starts
-3. agents.invoke('/decompose') → generates sub-questions
-4. SSE: hitl_request → Frontend shows ApprovalCard
-5. User edits sub-questions → POST /approve
-6. POST /research (resume) → continues with approved questions
-7. Promise.all([agents.invoke('/search-lit'), agents.invoke('/search-web')])
-8. agents.invoke('/synthesize') → generates markdown report
-9. Report streamed via SSE → rendered in ReportView
-10. Report saved to Memory + archived to Blob
-```
+> Note: `PROJECT_ID` and `EDGEONE_PAGES_API_TOKEN` are auto-injected on deployment. For local dev with Blob persistence, configure them manually in `.env`. Without them, the app still works but projects/chat history won't persist (a warning will be shown).
 
 ## Project Structure
 
 ```
 deep-research-edgeone/
 ├── agents/
-│   ├── _shared.ts        # Model init, logger, SSE helpers, Sandbox utils
-│   ├── research.ts       # Orchestrator — agents.invoke + Memory + Blob
-│   ├── decompose.ts      # Sub-agent: question decomposition
-│   ├── search-lit.ts     # Sub-agent: academic search (CrossRef + Semantic Scholar)
-│   ├── search-web.ts     # Sub-agent: web search (DuckDuckGo + Sandbox)
-│   ├── synthesize.ts     # Sub-agent: report compilation
-│   ├── search.ts         # Standalone deepagents search (tool calling demo)
-│   ├── approve.ts        # HITL approval endpoint
-│   ├── history.ts        # Research history CRUD (Blob)
+│   ├── _shared.ts        # Model/provider init, SSE helpers, safeFetch, sandbox utils
+│   ├── research.ts       # Main research agent (decompose + search + synthesize + continuation + structure check)
+│   ├── chat.ts           # Follow-up chat agent (lightweight, no tools)
+│   ├── project.ts        # Project CRUD + version management + chat persistence (Blob)
+│   ├── scrape.ts         # URL scraping (browser_fetch + safeFetch fallback)
 │   ├── stop.ts           # Cancel active research
-│   ├── health.ts         # Health check
-│   └── test.ts           # Model connectivity test
+│   └── health.ts         # Health check
 ├── app/
-│   ├── page.tsx          # Main page (SSE consumer, HITL, history)
+│   ├── page.tsx          # Main page (state management, SSE consumer, two-phase flow)
 │   ├── layout.tsx
-│   ├── globals.css
+│   ├── globals.css       # Tailwind + prose-research styles (tables, code blocks)
 │   └── components/
-│       ├── research-form.tsx    # Input + depth + history dropdown
-│       ├── approval-card.tsx    # HITL sub-question editor
-│       ├── progress-tree.tsx    # Stage lifecycle visualization
-│       ├── sources-panel.tsx    # Academic/web sources tabs
-│       ├── source-card.tsx      # Individual source display
-│       └── report-view.tsx      # Markdown report rendering
-├── components/ui/         # Shared UI primitives
+│       ├── research-form.tsx        # Question input + depth selector
+│       ├── sub-question-confirm.tsx # HITL editable sub-question list
+│       ├── progress-tree.tsx        # Stage lifecycle + collapsible sub-questions
+│       ├── sources-panel.tsx        # Academic/web sources tabs
+│       ├── source-card.tsx          # Individual source display
+│       ├── report-view.tsx          # Streaming markdown (remark-gfm)
+│       ├── follow-up-chat.tsx       # Chat + regenerate + add source + Blob persistence
+│       ├── project-selector.tsx     # Fixed sidebar project list
+│       ├── version-selector.tsx     # Version history + compare
+│       └── diff-view.tsx            # Side-by-side version diff
+├── components/ui/         # Shared UI primitives (Card, Button, Tabs, etc.)
 ├── lib/
 │   ├── i18n.tsx          # Chinese/English translations
 │   └── utils.ts
-├── edgeone.json          # EdgeOne deployment config
-├── .env.example          # Environment variable template
+├── .env.example
 └── package.json
 ```
 
 ## Development Notes
 
-- **Agent rebuild**: EdgeOne CLI may not hot-reload agent changes reliably. Always run `rm -rf .edgeone/agent-node && edgeone pages dev -t <TOKEN>` after modifying files in `agents/`.
-- **Sandbox**: Requires `@edgeone/pages-agent-toolkit` in `.edgeone/agent-node/node_modules/`. In local dev, sandbox may fail to acquire (WAF/network); search agents gracefully fallback to runtime fetch.
-- **Blob storage**: Works with `PROJECT_ID` + `EDGEONE_PAGES_API_TOKEN` configured in `.env`, or auto-injected on deployment.
-- **Memory API**: Requires EdgeOne Pages runtime. Falls back gracefully in local dev.
-- **Model choice**: `@makers/deepseek-v4-flash` recommended for speed. Avoid `@makers/glm-5.1` (slow, may timeout).
-- **No `temperature` param**: Some models (kimi-k2.6) only allow temperature=1. Omitted for compatibility.
-- **Search fallback**: Sandbox curl → runtime fetch → mock data. Real search works in both local dev (via fetch) and deployed (via sandbox).
+- **Agent rebuild**: Run `rm -rf .edgeone/agent-node && edgeone makes dev` after modifying `agents/` files.
+- **Model**: Uses `@makers/deepseek-v4-flash` (hardcoded). This model may stop at ~300 tokens per response — the auto-continuation loop handles this.
+- **Web search**: Primary strategy uses built-in `web_search` tool. Falls back to curl Bing/DuckDuckGo, then mock data.
+- **Blob unavailable**: When `PROJECT_ID`/`EDGEONE_PAGES_API_TOKEN` are not configured, a warning banner appears. The app remains functional but projects and chat history won't persist.
+- **Incremental editing**: Follow-up regeneration sends the full previous report with instructions to only modify requested sections.
+- **Structure check**: After report generation, duplicate conclusion/references sections are automatically removed.
 
 ## Deployment
 
 ```bash
-edgeone deploy
+edgeone makes deploy
 ```
 
-Once deployed, all platform features (Memory, Blob, Agent Invoke, Tracer) are automatically available without additional configuration.
+All platform features (Blob, Sandbox, Tools, AI Gateway) are automatically available on deployment.
 
 ## License
 
