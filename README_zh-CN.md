@@ -99,7 +99,7 @@ rm -rf .edgeone/agent-node && edgeone pages dev
 |------|------|------|
 | `AI_GATEWAY_API_KEY` | 是 | AI Gateway API Key |
 | `AI_GATEWAY_BASE_URL` | 是 | AI Gateway Base URL |
-| `AI_MODEL` | 否 | 模型名称（默认 `@Pages/deepseek-v4-flash`） |
+| `AI_MODEL` | 否 | 模型名称（默认 `@makers/deepseek-v4-flash`） |
 | `PROJECT_ID` | 否 | Pages 项目 ID（部署时自动注入） |
 | `EDGEONE_PAGES_API_TOKEN` | 否 | API Token（部署时自动注入） |
 | `SANDBOX_API_BASE` | 否 | 沙箱 API 地址（平台自动解析） |

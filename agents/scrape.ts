@@ -76,18 +76,38 @@ export async function scrapeUrls(context: any, urls: string[]): Promise<ScrapedU
     logger.log(`[scrape] Fetching: ${url}`);
 
     try {
-      // Strategy 1: Platform browser tool
+      // Strategy 1: Platform browser_fetch tool (new API)
       let content: string | null = null;
       let title = '';
 
-      const browserResult = await executePlatformTool(context, 'browser', { op: 'fetch', url });
-      if (browserResult) {
-        const rawContent = typeof browserResult === 'string' ? browserResult : browserResult.content;
-        title = browserResult.title || '';
-        if (rawContent && rawContent.length > 100) {
-          content = rawContent;
-          if (!title) title = extractTitle(rawContent);
-          logger.log(`[scrape] Browser fetch OK: ${url} (${rawContent.length} chars, ${Date.now() - startTime}ms)`);
+      const browserFetchTool = context.tools?.get?.('browser_fetch') || getPlatformTool(context, 'browser_fetch');
+      if (browserFetchTool) {
+        const execute = browserFetchTool.execute || browserFetchTool.handler || browserFetchTool.invoke;
+        if (typeof execute === 'function') {
+          const browserResult = await execute.call(browserFetchTool, { url });
+          const rawContent = typeof browserResult === 'string' ? browserResult
+            : browserResult?.content?.[0]?.text ? browserResult.content[0].text
+            : browserResult?.content || '';
+          title = browserResult?.title || '';
+          if (rawContent && rawContent.length > 100) {
+            content = rawContent;
+            if (!title) title = extractTitle(rawContent);
+            logger.log(`[scrape] browser_fetch OK: ${url} (${rawContent.length} chars, ${Date.now() - startTime}ms)`);
+          }
+        }
+      }
+
+      // Strategy 1b: Legacy browser tool (old API, fallback)
+      if (!content) {
+        const browserResult = await executePlatformTool(context, 'browser', { op: 'fetch', url });
+        if (browserResult) {
+          const rawContent = typeof browserResult === 'string' ? browserResult : browserResult.content;
+          title = browserResult.title || '';
+          if (rawContent && rawContent.length > 100) {
+            content = rawContent;
+            if (!title) title = extractTitle(rawContent);
+            logger.log(`[scrape] Legacy browser fetch OK: ${url} (${rawContent.length} chars, ${Date.now() - startTime}ms)`);
+          }
         }
       }
 

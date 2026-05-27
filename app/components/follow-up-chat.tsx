@@ -10,19 +10,28 @@ interface ChatMessage {
   isStreaming?: boolean;
 }
 
+interface SuggestedSource {
+  title: string;
+  url?: string;
+  year?: number;
+  authors?: string;
+}
+
 interface FollowUpChatProps {
   onRegenerate: (chatSummary: string) => void;
+  onAddSource?: (source: SuggestedSource) => void;
   isRegenerating: boolean;
   projectId: string;
   report: string;
 }
 
-export function FollowUpChat({ onRegenerate, isRegenerating, report }: FollowUpChatProps) {
+export function FollowUpChat({ onRegenerate, onAddSource, isRegenerating, report }: FollowUpChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showRegenerate, setShowRegenerate] = useState(false);
   const [regenerateSuggestion, setRegenerateSuggestion] = useState('');
+  const [suggestedSources, setSuggestedSources] = useState<SuggestedSource[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
@@ -107,6 +116,10 @@ export function FollowUpChat({ onRegenerate, isRegenerating, report }: FollowUpC
             } else if (event.type === 'suggest_regenerate') {
               setShowRegenerate(true);
               setRegenerateSuggestion(event.suggestion || '');
+            } else if (event.type === 'suggest_add_source') {
+              if (event.source) {
+                setSuggestedSources(prev => [...prev, event.source]);
+              }
             } else if (event.type === 'error_message') {
               fullContent += `\n\n⚠️ ${event.content}`;
               setMessages(prev =>
@@ -231,6 +244,43 @@ export function FollowUpChat({ onRegenerate, isRegenerating, report }: FollowUpC
               <span className="opacity-75 ml-1">— {regenerateSuggestion.slice(0, 30)}{regenerateSuggestion.length > 30 ? '...' : ''}</span>
             )}
           </button>
+        </div>
+      )}
+
+      {/* Suggested Sources — ask user to add to left panel */}
+      {suggestedSources.length > 0 && onAddSource && (
+        <div className="mx-4 mb-3 space-y-2">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">是否添加以下文献到论文列表？</p>
+          {suggestedSources.map((source, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20"
+            >
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate">{source.title}</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {[source.authors, source.year, source.url && new URL(source.url).hostname].filter(Boolean).join(' · ')}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  onAddSource(source);
+                  setSuggestedSources(prev => prev.filter((_, idx) => idx !== i));
+                }}
+                className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium transition-colors"
+              >
+                添加
+              </button>
+              <button
+                onClick={() => {
+                  setSuggestedSources(prev => prev.filter((_, idx) => idx !== i));
+                }}
+                className="flex-shrink-0 px-2 py-1.5 rounded-lg hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-500 text-xs transition-colors"
+              >
+                忽略
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

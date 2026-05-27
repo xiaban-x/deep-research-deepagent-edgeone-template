@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { useI18n } from '@/lib/i18n';
 import type { SubagentEvent } from '../page';
@@ -87,6 +88,16 @@ export function ProgressTree({ subagents, isActive }: ProgressTreeProps) {
                     {sub.description}
                   </p>
                 )}
+                {/* Show sub-questions when question-decomposer completes */}
+                {sub.agent === 'question-decomposer' && sub.status === 'complete' && sub.content && (() => {
+                  try {
+                    const questions = JSON.parse(sub.content);
+                    if (Array.isArray(questions) && questions.length > 0) {
+                      return <SubQuestionList questions={questions} />;
+                    }
+                  } catch {}
+                  return null;
+                })()}
               </div>
             </div>
           ))}
@@ -103,5 +114,34 @@ export function ProgressTree({ subagents, isActive }: ProgressTreeProps) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// Collapsible sub-question list to avoid taking too much space
+function SubQuestionList({ questions }: { questions: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+      >
+        <svg className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        {questions.length} 个子问题
+      </button>
+      {expanded && (
+        <ul className="mt-1.5 ml-1 space-y-1 border-l-2 border-neutral-200 dark:border-neutral-700 pl-2.5 max-h-48 overflow-y-auto">
+          {questions.map((q: string, i: number) => (
+            <li key={i} className="text-[11px] text-neutral-600 dark:text-neutral-400 flex items-start gap-1">
+              <span className="text-neutral-400 dark:text-neutral-500 font-mono flex-shrink-0 text-[10px] mt-px">{i + 1}.</span>
+              <span className="leading-snug line-clamp-2">{q}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

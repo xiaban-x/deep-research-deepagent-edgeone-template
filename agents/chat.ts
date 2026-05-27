@@ -49,6 +49,14 @@ ${reportContext}
 - 不要在每次回复都加，只在真正有实质性修改需求时才加
 - 在 [SUGGEST_REGENERATE] 之前，先用一句话总结你建议修改的要点
 
+## 关于论文/文献更新：
+- 如果用户反馈论文太老、引用过时、希望更新文献，或者用户发送了新的论文链接/DOI/文献信息
+- 在你的回复末尾另起一行加上：[SUGGEST_ADD_SOURCE]{"title":"论文标题","url":"链接(如有)","year":年份(如有),"authors":"作者(如有)"}
+- 可以添加多条，每条一行
+- 提取用户提供的论文信息填入，如果信息不全可以只填已知字段
+- 在标记之前，先用一句话确认你理解了用户想添加/更新的内容
+- 不要在没有明确文献更新意图时加这个标记
+
 ## 注意：
 - 用与报告相同的语言回复
 - 保持简洁的对话风格，不需要写成报告格式
@@ -87,7 +95,7 @@ async function* streamChat(
     const result = await run(agent, input as any, {
       stream: true,
       signal,
-      maxTurns: 1,
+      maxTurns: 3,
       modelSettings: { maxTokens: 4096 },
     });
 
@@ -101,8 +109,8 @@ async function* streamChat(
           // Skip <think> blocks
           if (!text.includes('<think>') && !text.includes('</think>')) {
             response += text;
-            // Don't stream the [SUGGEST_REGENERATE] marker to the user
-            if (!text.includes('[SUGGEST_REGENERATE]')) {
+            // Don't stream the [SUGGEST_REGENERATE] or [SUGGEST_ADD_SOURCE] markers to the user
+            if (!text.includes('[SUGGEST_REGENERATE]') && !text.includes('[SUGGEST_ADD_SOURCE]')) {
               yield sseEvent({ type: 'chat_response', content: text });
             }
           }
@@ -131,6 +139,15 @@ async function* streamChat(
       const parts = response.split('[SUGGEST_REGENERATE]');
       const suggestion = parts[0].trim().split('\n').pop()?.trim() || '';
       yield sseEvent({ type: 'suggest_regenerate', suggestion });
+    }
+
+    // Check if AI suggested adding sources
+    const sourceMatches = [...response.matchAll(/\[SUGGEST_ADD_SOURCE\](\{[^\n]+\})/g)];
+    for (const match of sourceMatches) {
+      try {
+        const sourceData = JSON.parse(match[1]);
+        yield sseEvent({ type: 'suggest_add_source', source: sourceData });
+      } catch {}
     }
 
     logger.log(`Chat complete, length=${response.length}, suggestRegenerate=${suggestRegenerate}`);

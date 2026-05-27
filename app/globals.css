@@ -67,6 +67,38 @@
   .prose-research blockquote {
     @apply border-l-4 border-neutral-300 dark:border-neutral-600 pl-4 italic text-neutral-600 dark:text-neutral-400 my-4;
   }
+
+  .prose-research table {
+    @apply w-full border-collapse my-4 text-sm;
+  }
+
+  .prose-research thead {
+    @apply bg-neutral-100 dark:bg-neutral-800;
+  }
+
+  .prose-research th {
+    @apply border border-neutral-200 dark:border-neutral-700 px-3 py-2 text-left font-semibold text-neutral-900 dark:text-neutral-100;
+  }
+
+  .prose-research td {
+    @apply border border-neutral-200 dark:border-neutral-700 px-3 py-2 text-neutral-700 dark:text-neutral-300;
+  }
+
+  .prose-research tr:nth-child(even) {
+    @apply bg-neutral-50 dark:bg-neutral-800/50;
+  }
+
+  .prose-research code {
+    @apply bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sm font-mono;
+  }
+
+  .prose-research pre {
+    @apply bg-neutral-100 dark:bg-neutral-800 p-4 rounded-lg overflow-x-auto my-4;
+  }
+
+  .prose-research pre code {
+    @apply bg-transparent p-0;
+  }
 }
 
 @keyframes pulse-dot {

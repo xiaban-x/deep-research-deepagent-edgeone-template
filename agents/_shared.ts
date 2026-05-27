@@ -32,7 +32,7 @@ function createOpenAIClient(): OpenAI {
     apiKey: process.env.AI_GATEWAY_API_KEY!,
     baseURL: process.env.AI_GATEWAY_BASE_URL!,
     defaultHeaders: {
-      "X-Gateway-Timeout": "300",
+      "X-Gateway-Timeout": "600",
     },
   });
 }
@@ -41,7 +41,7 @@ export function getModel(): OpenAIChatCompletionsModel {
   const client = createOpenAIClient();
   return new OpenAIChatCompletionsModel(
     client,
-    process.env.AI_MODEL || "@Pages/deepseek-v4-flash",
+    "@makers/deepseek-v4-flash",
   );
 }
 

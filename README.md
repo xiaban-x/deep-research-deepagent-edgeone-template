@@ -114,7 +114,7 @@ rm -rf .edgeone/agent-node && edgeone dev
 |----------|----------|-------------|
 | `AI_GATEWAY_API_KEY` | Yes | AI Gateway API key |
 | `AI_GATEWAY_BASE_URL` | Yes | AI Gateway base URL |
-| `AI_MODEL` | No | Model name (default: `@Pages/deepseek-v4-flash`) |
+| `AI_MODEL` | No | Model name (default: `@makers/deepseek-v4-flash`) |
 | `PROJECT_ID` | No | Pages project ID for Blob/Sandbox (auto-injected on EdgeOne Pages) |
 | `EDGEONE_PAGES_API_TOKEN` | No | API token for Blob/Sandbox access (auto-injected on EdgeOne Pages) |
 | `SANDBOX_API_BASE` | No | Sandbox API endpoint (default: auto-resolved by platform) |
@@ -177,7 +177,7 @@ deep-research-edgeone/
 - **Sandbox**: Requires `@edgeone/pages-agent-toolkit` in `.edgeone/agent-node/node_modules/`. In local dev, sandbox may fail to acquire (WAF/network); search agents gracefully fallback to runtime fetch.
 - **Blob storage**: Works with `PROJECT_ID` + `EDGEONE_PAGES_API_TOKEN` configured in `.env`, or auto-injected on deployment.
 - **Memory API**: Requires EdgeOne Pages runtime. Falls back gracefully in local dev.
-- **Model choice**: `@Pages/deepseek-v4-flash` recommended for speed. Avoid `@Pages/glm-5.1` (slow, may timeout).
+- **Model choice**: `@makers/deepseek-v4-flash` recommended for speed. Avoid `@makers/glm-5.1` (slow, may timeout).
 - **No `temperature` param**: Some models (kimi-k2.6) only allow temperature=1. Omitted for compatibility.
 - **Search fallback**: Sandbox curl → runtime fetch → mock data. Real search works in both local dev (via fetch) and deployed (via sandbox).
 

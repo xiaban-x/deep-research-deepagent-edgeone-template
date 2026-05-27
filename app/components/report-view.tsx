@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
@@ -90,21 +91,23 @@ export function ReportView({ content, isStreaming }: ReportViewProps) {
       <CardContent>
         <div
           ref={containerRef}
-          className="max-h-[70vh] overflow-y-auto pr-2"
+          className="max-h-[70vh] overflow-y-auto pr-2 relative"
         >
-          <div className="prose-research max-w-prose">
-            {content ? (
-              <ReactMarkdown>{content}</ReactMarkdown>
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                {t.generatingReport}
-              </div>
-            )}
-          </div>
+          {/* Loading state when waiting for report content */}
+          {isStreaming && !content && (
+            <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400 py-4">
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {t.generatingReport}
+            </div>
+          )}
+          {content && (
+            <div className="prose-research max-w-prose">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </div>
+          )}
         </div>
 
         {/* Scroll to top button */}

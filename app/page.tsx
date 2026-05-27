@@ -9,6 +9,7 @@ import { ProjectSelector } from './components/project-selector';
 import { FollowUpChat } from './components/follow-up-chat';
 import { VersionSelector } from './components/version-selector';
 import { DiffView } from './components/diff-view';
+import { SubQuestionConfirm } from './components/sub-question-confirm';
 import { LanguageToggle } from '@/components/ui/language-toggle';
 import { TokenUsage } from '@/components/ui/token-usage';
 import { useI18n } from '@/lib/i18n';
@@ -75,6 +76,11 @@ export default function Home() {
   // Sidebar collapsed on mobile
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  // Sub-question confirmation state
+  const [pendingSubQuestions, setPendingSubQuestions] = useState<string[] | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState('');
+  const [pendingDepth, setPendingDepth] = useState('standard');
+
   // Diff state
   const [diffData, setDiffData] = useState<DiffData | null>(null);
 
@@ -108,7 +114,7 @@ export default function Home() {
     } catch {}
   };
 
-  const loadProjectVersions = async (projectId: string) => {
+  const loadProjectVersions = async (projectId: string): Promise<number> => {
     try {
       const res = await fetch('/project', {
         method: 'POST',
@@ -122,8 +128,10 @@ export default function Home() {
         if (v && v.length > 0) {
           loadVersion(projectId, v[v.length - 1].version);
         }
+        return (v || []).length;
       }
     } catch {}
+    return 0;
   };
 
   const loadVersion = async (projectId: string, version: number) => {
@@ -225,7 +233,7 @@ export default function Home() {
     }).catch(() => {});
   }, [conversationId]);
 
-  // Main research handler
+  // Main research handler — Phase 1: decompose only, wait for user confirmation
   const handleResearch = useCallback(async (question: string, depth: string) => {
     setIsResearching(true);
     setSubagents([]);
@@ -233,16 +241,36 @@ export default function Home() {
     setReport('');
     setError(null);
     setTokenUsage({ input: 0, output: 0 });
+    setPendingSubQuestions(null);
+    setPendingQuestion(question);
+    setPendingDepth(depth);
 
-    await streamResearch({ message: question, depth, projectId: selectedProjectId || undefined });
+    // Phase 1: decompose only
+    await streamResearch({ message: question, depth, projectId: selectedProjectId || undefined, decomposeOnly: true });
   }, [selectedProjectId]);
+
+  // Phase 2: user confirmed sub-questions, proceed with full research
+  const handleConfirmSubQuestions = useCallback(async (confirmedQuestions: string[]) => {
+    setPendingSubQuestions(null);
+    setIsResearching(true);
+    setSubagents([]);
+    setSources([]);
+    setReport('');
+    setError(null);
+
+    await streamResearch({
+      message: pendingQuestion,
+      depth: pendingDepth,
+      projectId: selectedProjectId || undefined,
+      confirmedSubQuestions: confirmedQuestions,
+    });
+  }, [selectedProjectId, pendingQuestion, pendingDepth]);
 
   // Regenerate report (triggered from chat after user confirms)
   const handleRegenerate = useCallback(async (chatSummary: string) => {
     setIsResearching(true);
     setSubagents([]);
-    setSources([]);
-    setReport('');
+    // Keep old report and sources visible until new content starts streaming
     setError(null);
     setTokenUsage({ input: 0, output: 0 });
 
@@ -253,9 +281,27 @@ export default function Home() {
     });
   }, [selectedProjectId]);
 
+  // Add a source to the left panel (triggered from chat suggest_add_source)
+  const handleAddSource = useCallback((source: { title: string; url?: string; year?: number; authors?: string }) => {
+    setSources(prev => {
+      const nextCitationNumber = prev.length > 0 ? Math.max(...prev.map(s => s.citationNumber)) + 1 : 1;
+      const newSource: Source = {
+        type: 'academic',
+        title: source.title,
+        url: source.url,
+        year: source.year,
+        authors: source.authors ? [source.authors] : undefined,
+        citationNumber: nextCitationNumber,
+      };
+      return [...prev, newSource];
+    });
+  }, []);
+
   // Core streaming logic
   const streamResearch = async (body: Record<string, unknown>) => {
     let citationCounter = 0;
+    let lastReport = '';
+    let lastSources: Source[] = [];
 
     abortControllerRef.current = new AbortController();
 
@@ -267,7 +313,18 @@ export default function Home() {
         signal: abortControllerRef.current.signal,
       });
 
-      if (!response.ok) throw new Error(`Research failed: ${response.statusText}`);
+      if (!response.ok) {
+        let errMsg = `Research failed: ${response.statusText}`;
+        try {
+          const errBody = await response.text();
+          if (response.status === 429 || errBody.includes("quota")) {
+            errMsg = t.quotaExhausted;
+          } else if (errBody) {
+            errMsg = errBody.slice(0, 200);
+          }
+        } catch {}
+        throw new Error(errMsg);
+      }
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response stream');
@@ -318,6 +375,7 @@ export default function Home() {
                           }
                           return { type: 'web' as const, citationNumber: citationCounter, ...item };
                         });
+                      lastSources = [...lastSources, ...newSources];
                       setSources(prev => [...prev, ...newSources]);
                     }
                   } catch {}
@@ -331,17 +389,34 @@ export default function Home() {
               case 'ai_response':
                 const agent = event.agent || currentAgent;
                 if (agent === 'synthesizer' || agent === 'main') {
+                  if (!synthesizerContent) {
+                    // First chunk of new report — replace old sources with new ones from this run
+                    setSources(lastSources);
+                  }
                   synthesizerContent += event.content;
+                  lastReport = synthesizerContent;
                   setReport(synthesizerContent);
                 }
                 break;
 
               case 'error_message':
-                setError(event.content);
+                const errContent = event.content || '';
+                if (errContent.includes('429') || errContent.includes('quota')) {
+                  setError(t.quotaExhausted);
+                } else {
+                  setError(errContent);
+                }
                 break;
 
               case 'usage':
                 setTokenUsage({ input: event.input_tokens || 0, output: event.output_tokens || 0 });
+                break;
+
+              case 'decompose_complete':
+                // Sub-questions generated — show for user confirmation
+                if (Array.isArray(event.subQuestions) && event.subQuestions.length > 0) {
+                  setPendingSubQuestions(event.subQuestions);
+                }
                 break;
             }
           } catch {}
@@ -350,15 +425,36 @@ export default function Home() {
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setError((e as Error).message);
+        setSubagents([]);
       }
     } finally {
       setIsResearching(false);
       abortControllerRef.current = null;
-      if (selectedProjectId) {
-        // Wait briefly for backend to finish saving the version
-        // (especially when stream was terminated by runtime timeout)
-        await new Promise(r => setTimeout(r, 1500));
+      if (selectedProjectId && lastReport) {
+        // Save version directly from frontend (more reliable than backend internal invoke)
+        try {
+          const papers = lastSources.filter(s => s.type === 'academic');
+          const articles = lastSources.filter(s => s.type === 'web');
+          await fetch('/project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'save_version',
+              id: selectedProjectId,
+              versionData: {
+                question: body.message || '',
+                depth: body.depth || 'standard',
+                papers,
+                articles,
+                report: lastReport,
+                trigger: versions.length > 0 ? 'follow-up' : 'initial',
+              },
+            }),
+          });
+        } catch {}
+        // Reload versions immediately after save
         await loadProjectVersions(selectedProjectId);
+        await loadProjects();
       }
     }
   };
@@ -419,8 +515,8 @@ export default function Home() {
         </header>
 
         <div className="max-w-6xl mx-auto px-6 py-8">
-          {/* Research Form — only shown when no project selected or project has no versions yet */}
-          {(!selectedProjectId || versions.length === 0) && (
+          {/* Research Form — hidden once a report is generated */}
+          {!report && !pendingSubQuestions && (!selectedProjectId || versions.length === 0) && (
             <>
               {selectedProjectId && versions.length === 0 && !isResearching && (
                 <div className="mb-6 p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-sm flex items-center gap-3">
@@ -443,6 +539,15 @@ export default function Home() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Sub-question Confirmation UI */}
+          {pendingSubQuestions && (
+            <SubQuestionConfirm
+              questions={pendingSubQuestions}
+              onConfirm={handleConfirmSubQuestions}
+              onCancel={() => { setPendingSubQuestions(null); setPendingQuestion(''); setPendingDepth('standard'); }}
+            />
           )}
 
           {/* Error Display */}
@@ -469,8 +574,8 @@ export default function Home() {
             <DiffView v1={diffData.v1} v2={diffData.v2} onClose={() => setDiffData(null)} />
           )}
 
-          {/* Results Area */}
-          {(subagents.length > 0 || report) && (
+          {/* Results Area — hide when there's an error and no report */}
+          {(subagents.length > 0 || report) && !error && (
             <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-1 space-y-6">
                 <ProgressTree subagents={subagents} isActive={isResearching} />
@@ -482,14 +587,15 @@ export default function Home() {
             </div>
           )}
 
-          {/* Follow-up Chat — shown after first research completes (project has versions) */}
-          {selectedProjectId && versions.length > 0 && (
+          {/* Follow-up Chat — shown after research completes */}
+          {(report && !isResearching) && (
             <div className="mt-8">
               <FollowUpChat
-                key={`chat-${selectedProjectId}-${currentVersion}`}
+                key={`chat-${selectedProjectId || 'none'}`}
                 onRegenerate={handleRegenerate}
+                onAddSource={handleAddSource}
                 isRegenerating={isResearching}
-                projectId={selectedProjectId}
+                projectId={selectedProjectId || ''}
                 report={report}
               />
             </div>

@@ -54,6 +54,7 @@ export const translations = {
     added: '新增',
     removed: '删除',
     close: '关闭',
+    quotaExhausted: 'AI 模型调用额度已用尽，请稍后再试或升级套餐。',
   },
   en: {
     title: 'Deep Research',
@@ -104,6 +105,7 @@ export const translations = {
     added: 'Added',
     removed: 'Removed',
     close: 'Close',
+    quotaExhausted: 'AI model quota exhausted. Please try again later or upgrade your plan.',
   },
 };
 

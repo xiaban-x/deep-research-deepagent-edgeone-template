@@ -488,20 +488,50 @@ const searchLiterature = tool({
 
 const searchWeb = tool({
   name: "search_web",
-  description: "Search the web for relevant articles using Google via browser. Call this ONCE with a combined query. Returns JSON with articles array.",
+  description: "Search the web for relevant articles. Call this ONCE with a focused query directly related to the research topic. The query should be specific and in the same language as the research question. Returns JSON with articles array.",
   parameters: z.object({
-    query: z.string().describe("Search query for web articles (combine key terms from sub-questions)"),
+    query: z.string().describe("Search query — MUST be specific and directly related to the main research topic. Use the same language as the original question. Example: if topic is '315打假', query should be '315打假 消费者权益 央视晚会' NOT generic terms."),
   }),
   execute: async ({ query }) => {
     const context = _currentContext;
     let articles: Article[] = [];
 
-    // Try platform browser tool (Google search via sandbox)
-    articles = await searchWithBrowser(context, query);
+    // Strategy 1: Use built-in web_search tool (most reliable)
+    try {
+      const webSearchTool = context?.tools?.get?.('web_search') || context?.tools?.all?.()?.find((t: any) => t.name === 'web_search');
+      if (webSearchTool) {
+        logger.log(`[searchWeb] Using built-in web_search tool, query="${query}"`);
+        const result = await webSearchTool.execute({ query, maxResults: 10 });
+        const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+        // Parse result: web_search returns {title, href, body, engine}[]
+        const items = parsed?.content?.[0]?.text ? JSON.parse(parsed.content[0].text) : (Array.isArray(parsed) ? parsed : []);
+        if (Array.isArray(items) && items.length > 0) {
+          articles = items.map((item: any) => ({
+            title: item.title || '',
+            url: item.href || item.url || '',
+            source: (() => { try { return new URL(item.href || item.url || '').hostname.replace('www.', ''); } catch { return ''; } })(),
+            date: item.date || '',
+            snippet: item.body || item.snippet || '',
+          })).filter((a: Article) => a.title && a.url);
+          logger.log(`[searchWeb] web_search tool returned ${articles.length} results:`);
+          articles.forEach((a, i) => logger.log(`  [${i+1}] ${a.title} | ${a.url} | ${a.snippet?.slice(0, 80)}`));
+        } else {
+          logger.log(`[searchWeb] web_search tool returned empty/unparseable result: ${JSON.stringify(parsed).slice(0, 500)}`);
+        }
+      }
+    } catch (e) {
+      logger.log(`[searchWeb] web_search tool failed: ${(e as Error).message}`);
+    }
 
-    // Fallback to mock
+    // Strategy 2: Fallback to searchWithBrowser (curl Bing/DuckDuckGo)
     if (articles.length === 0) {
-      logger.log('Browser unavailable, using mock articles');
+      logger.log('[searchWeb] Falling back to searchWithBrowser');
+      articles = await searchWithBrowser(context, query);
+    }
+
+    // Strategy 3: Fallback to mock
+    if (articles.length === 0) {
+      logger.log('All search strategies failed, using mock articles');
       articles = searchMockArticles(query);
     }
 
@@ -538,27 +568,44 @@ interface ResearchOptions {
   previousReport?: string;
   previousSources?: string;
   isFollowUp?: boolean;
+  confirmedSubQuestions?: string[];
+  decomposeOnly?: boolean;
 }
 
 function buildSystemPrompt(opts: ResearchOptions): string {
-  const { depth, urls, previousReport, isFollowUp } = opts;
+  const { depth, urls, previousReport, isFollowUp, confirmedSubQuestions } = opts;
   const countMap: Record<string, string> = { quick: '2-3', standard: '3-5', deep: '5-7' };
   const count = countMap[depth] || '3-5';
 
   const hasUrls = urls && urls.length > 0;
+  const hasConfirmedQuestions = confirmedSubQuestions && confirmedSubQuestions.length > 0;
   const toolSteps = [];
-  toolSteps.push(`1. Call \`decompose_question\` with the question and depth="${depth}" — generate ${count} sub-questions (pass them in the subQuestions parameter)`);
-  toolSteps.push('2. Call `search_literature` ONCE with a combined query from the sub-questions');
-  toolSteps.push('3. Call `search_web` ONCE with a combined query from the sub-questions');
-  if (hasUrls) {
-    toolSteps.push(`4. Call \`scrape_urls\` with the user-provided URLs: ${JSON.stringify(urls)}`);
-    toolSteps.push(`5. After all tool calls complete, write the final research report`);
+
+  if (hasConfirmedQuestions) {
+    // Sub-questions already confirmed by user — skip decompose step
+    toolSteps.push('1. The sub-questions have been pre-confirmed by the user (listed below). Do NOT call `decompose_question`.');
+    toolSteps.push('2. Call `search_literature` ONCE with a query combining KEY TERMS from the main question (keep it focused and specific)');
+    toolSteps.push('3. Call `search_web` ONCE with a query using the MAIN TOPIC keywords in the original language (e.g. for Chinese topics, search in Chinese)');
+    if (hasUrls) {
+      toolSteps.push(`4. Call \`scrape_urls\` with the user-provided URLs: ${JSON.stringify(urls)}`);
+      toolSteps.push('5. After all tool calls complete, write the final research report');
+    } else {
+      toolSteps.push('4. After all tool calls complete, write the final research report');
+    }
   } else {
-    toolSteps.push('4. After all 3 tool calls complete, write the final research report');
+    toolSteps.push(`1. Call \`decompose_question\` with the question and depth="${depth}" — generate ${count} sub-questions (pass them in the subQuestions parameter)`);
+    toolSteps.push('2. Call `search_literature` ONCE — query should use KEY TERMS from the main research topic (keep focused, specific)');
+    toolSteps.push('3. Call `search_web` ONCE — query should use the MAIN TOPIC keywords in the SAME LANGUAGE as the question (e.g. Chinese question → Chinese search query)');
+    if (hasUrls) {
+      toolSteps.push(`4. Call \`scrape_urls\` with the user-provided URLs: ${JSON.stringify(urls)}`);
+      toolSteps.push('5. After all tool calls complete, write the final research report');
+    } else {
+      toolSteps.push('4. After all 3 tool calls complete, write the final research report');
+    }
   }
 
-  const lengthMap: Record<string, string> = { quick: '1500-2500字', standard: '2500-4000字', deep: '4000-6000字' };
-  const targetLength = lengthMap[depth] || '2500-4000字';
+  const lengthMap: Record<string, string> = { quick: '2000-3000字', standard: '4000-6000字', deep: '6000-10000字' };
+  const targetLength = lengthMap[depth] || '4000-6000字';
 
   let prompt = `You are a deep research assistant. Use the provided tools to conduct research, then write a comprehensive report.
 
@@ -570,25 +617,37 @@ ${toolSteps.join('\n')}
 - Combine sub-questions into ONE search query for each search tool.
 - After receiving tool results, write the report IMMEDIATELY.
 - NEVER retry a tool call. The results you get are final.
+${hasConfirmedQuestions ? `\n## Pre-confirmed Sub-questions:\n${confirmedSubQuestions!.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n\nUse these sub-questions directly for your searches. Do NOT call decompose_question.` : ''}
 
 ## Report Format:
 - Target length: ${targetLength} (IMPORTANT: stay within this range)
 - Markdown with ## for main sections, ### for subsections
+- Use GFM tables (| header | header |) when presenting comparative data
 - Inline citations like [1], [2] referencing sources
 - Structure: Executive Summary → Key Findings → Analysis → Conclusion → References
 - Academic but accessible tone
 - Write in the same language as the original research question
-- References section: list cited sources concisely (author, title, year only — NO full URLs)`;
+- Section headings: use clean names like "## 结论" or "## 参考文献" — do NOT use slash-combined names like "结论/总结" or "参考文献/References"
+- References section: list cited sources concisely (author, title, year only — NO full URLs)
+- CRITICAL: You MUST write the COMPLETE report. Do NOT stop mid-sentence or mid-section. If the report is long, continue writing until all sections are complete including the References section.`;
 
   if (isFollowUp && previousReport) {
     prompt += `
 
-## FOLLOW-UP RESEARCH CONTEXT:
-You are continuing a previous research effort. Build upon the previous findings.
-Previous report summary (first 2000 chars):
-${previousReport.slice(0, 2000)}
+## FOLLOW-UP RESEARCH — INCREMENTAL EDITING MODE:
+You are EDITING an existing research report based on user feedback.
+CRITICAL RULES for editing:
+- PRESERVE the existing report structure and content that doesn't need changes
+- Only MODIFY sections the user explicitly asks to change
+- Only ADD new sections/chapters where the user requests them
+- If user asks to "add a chapter about X": insert it at the appropriate position in the report, keep everything else intact
+- If user asks to "update section Y": rewrite only that section, preserve all others
+- If user provides new sources/papers: integrate them into relevant sections
+- Always output the COMPLETE updated report (existing content + modifications)
+- Maintain consistent citation numbering throughout
 
-Incorporate new findings while preserving and building on prior insights. Produce a NEW complete report (not just an addendum).`;
+Full previous report:
+${previousReport}`;
   }
 
   return prompt;
@@ -603,7 +662,7 @@ async function* streamResearch(
   ensureProvider();
   _currentContext = context;
 
-  const { depth, projectId, urls, previousReport, isFollowUp } = opts;
+  const { depth, projectId, urls, previousReport, isFollowUp, confirmedSubQuestions, decomposeOnly } = opts;
   const conversationId = context.conversation_id || "default";
 
   // Save user message to memory
@@ -618,13 +677,80 @@ async function* streamResearch(
     } catch {}
   }
 
+  // ─── DecomposeOnly mode: just generate sub-questions and return ───
+  if (decomposeOnly) {
+    yield sseEvent({ type: 'subagent_lifecycle', status: 'pending', agent: 'question-decomposer', id: 'stage-1' });
+    yield sseEvent({ type: 'subagent_lifecycle', status: 'running', agent: 'question-decomposer', id: 'stage-1' });
+
+    const decomposeAgent = new Agent({
+      name: "question-decomposer",
+      instructions: `You are a research question decomposer. Break the given research question into focused sub-questions.
+Generate ${depth === 'quick' ? '2-3' : depth === 'deep' ? '5-7' : '3-5'} sub-questions that cover:
+- Background and definitions
+- Current state of research
+- Key challenges and debates
+- Future directions and applications
+Write sub-questions in the same language as the input question.
+Call the decompose_question tool with your generated sub-questions.`,
+      model: getModel(),
+      tools: [decomposeQuestion],
+      modelSettings: { maxTokens: 2048 },
+    });
+
+    try {
+      const result = await run(decomposeAgent, [{ role: "user", content: question }] as any, {
+        stream: true, signal, maxTurns: 10, modelSettings: { maxTokens: 4096 },
+      });
+
+      let subQs: string[] = [];
+      for await (const event of result) {
+        if (signal?.aborted) break;
+        if (event.type === "run_item_stream_event") {
+          const item = event.item as any;
+          if (item.type === "tool_call_output_item") {
+            try {
+              const parsed = JSON.parse(item.output || '');
+              if (parsed.subQuestions) subQs = parsed.subQuestions;
+            } catch {}
+          }
+        }
+      }
+      await result.completed;
+
+      if (subQs.length === 0) {
+        // Fallback
+        subQs = [
+          `What is the current state of "${question}"?`,
+          `What are the main challenges in "${question}"?`,
+          `What are the future directions for "${question}"?`,
+        ];
+      }
+
+      yield sseEvent({ type: 'subagent_lifecycle', status: 'complete', agent: 'question-decomposer', id: 'stage-1', content: JSON.stringify(subQs) });
+      yield sseEvent({ type: 'decompose_complete', subQuestions: subQs });
+    } catch (e: any) {
+      if (e.name !== 'AbortError' && !signal?.aborted) {
+        yield sseEvent({ type: 'error_message', content: e.message });
+      }
+    }
+
+    yield "data: [DONE]\n\n";
+    return;
+  }
+
+  // ─── Full research mode ───
   // Initialize progress stages
-  yield sseEvent({ type: 'subagent_lifecycle', status: 'pending', agent: 'question-decomposer', id: 'stage-1' });
+  if (confirmedSubQuestions && confirmedSubQuestions.length > 0) {
+    // Skip decompose stage — already confirmed
+    yield sseEvent({ type: 'subagent_lifecycle', status: 'complete', agent: 'question-decomposer', id: 'stage-1', content: JSON.stringify(confirmedSubQuestions) });
+  } else {
+    yield sseEvent({ type: 'subagent_lifecycle', status: 'pending', agent: 'question-decomposer', id: 'stage-1' });
+  }
   yield sseEvent({ type: 'subagent_lifecycle', status: 'pending', agent: 'literature-searcher', id: 'stage-2' });
   yield sseEvent({ type: 'subagent_lifecycle', status: 'pending', agent: 'web-researcher', id: 'stage-3' });
   yield sseEvent({ type: 'subagent_lifecycle', status: 'pending', agent: 'synthesizer', id: 'stage-4' });
 
-  const tools = [decomposeQuestion, searchLiterature, searchWeb];
+  const tools = confirmedSubQuestions ? [searchLiterature, searchWeb] : [decomposeQuestion, searchLiterature, searchWeb];
   if (urls && urls.length > 0) {
     tools.push(scrapeUrls as any);
   }
@@ -635,25 +761,29 @@ async function* streamResearch(
     model: getModel(),
     tools,
     modelSettings: {
-      maxTokens: 16384,
+      maxTokens: 65536,
     },
   });
 
-  const input = [{ role: "user", content: question }];
+  const input = confirmedSubQuestions
+    ? [{ role: "user", content: `${question}\n\nPre-confirmed sub-questions:\n${confirmedSubQuestions.map((q, i) => `${i+1}. ${q}`).join('\n')}` }]
+    : [{ role: "user", content: question }];
 
   let report = '';
   let papers: any[] = [];
   let articles: any[] = [];
-  let subQuestions: string[] = [];
+  let subQuestions: string[] = confirmedSubQuestions || [];
   let scrapedUrls: any[] = [];
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
   try {
     // maxTurns: 15 allows tool calls + long report generation
-    const result = await run(agent, input as any, { stream: true, signal, maxTurns: 15, modelSettings: { maxTokens: 16384 } });
+    const result = await run(agent, input as any, { stream: true, signal, maxTurns: 15, modelSettings: { maxTokens: 65536 } });
 
     let synthesizing = false;
+    let toolCallsSeen = false;  // Track if any tool calls have been made
+    let allToolsDone = false;   // Track if all tool outputs received
 
     for await (const event of result) {
       if (signal?.aborted) break;
@@ -664,6 +794,13 @@ async function* streamResearch(
         if (item.type === "tool_call_item") {
           const raw = item.rawItem;
           const toolName = raw?.name || "tool";
+          toolCallsSeen = true;
+          allToolsDone = false;  // New tool call starting, not done yet
+          // If we were accumulating pre-tool-call text, discard it
+          if (synthesizing) {
+            synthesizing = false;
+            report = '';
+          }
 
           // Map tool calls to progress stages
           if (toolName === 'decompose_question') {
@@ -681,6 +818,7 @@ async function* streamResearch(
         } else if (item.type === "tool_call_output_item") {
           const output = item.output || '';
           const toolName = item.rawItem?.name || '';
+          allToolsDone = true;  // Tool completed — next text delta is likely the report
 
           // Parse tool results for frontend sources display
           try {
@@ -701,7 +839,8 @@ async function* streamResearch(
             }
           } catch {}
         } else if (item.type === "message_output_item") {
-          // This is the final text output — mark synthesizer as running
+          // This is the final text output after all tool calls
+          allToolsDone = true;
           if (!synthesizing) {
             synthesizing = true;
             yield sseEvent({ type: 'subagent_lifecycle', status: 'running', agent: 'synthesizer', id: 'stage-4' });
@@ -716,14 +855,19 @@ async function* streamResearch(
           const text = data.delta;
           // Skip <think> blocks
           if (!text.includes('<think>') && !text.includes('</think>')) {
-            if (!synthesizing) {
-              synthesizing = true;
-              yield sseEvent({ type: 'subagent_lifecycle', status: 'running', agent: 'synthesizer', id: 'stage-4' });
-              yield sseEvent({ type: 'source_switch', agent: 'synthesizer' });
-              yield sseEvent({ type: 'progress', step: 4, total: 4, label: 'Writing research report...' });
+            // Only emit as report if all tools have completed
+            if (!allToolsDone) {
+              // Still in tool-calling phase or pre-tool text — don't emit as report
+            } else {
+              if (!synthesizing) {
+                synthesizing = true;
+                yield sseEvent({ type: 'subagent_lifecycle', status: 'running', agent: 'synthesizer', id: 'stage-4' });
+                yield sseEvent({ type: 'source_switch', agent: 'synthesizer' });
+                yield sseEvent({ type: 'progress', step: 4, total: 4, label: 'Writing research report...' });
+              }
+              report += text;
+              yield sseEvent({ type: 'ai_response', content: text, agent: 'synthesizer' });
             }
-            report += text;
-            yield sseEvent({ type: 'ai_response', content: text, agent: 'synthesizer' });
           }
         }
         // Capture token usage from response.completed or response.done events
@@ -764,35 +908,6 @@ async function* streamResearch(
       }
     }
 
-    if (synthesizing || report) {
-      yield sseEvent({ type: 'subagent_lifecycle', status: 'complete', agent: 'synthesizer', id: 'stage-4' });
-    }
-
-    // Persist report
-    if (context.store && report) {
-      try {
-        await context.store.appendMessage({
-          conversationId,
-          role: 'assistant',
-          content: report,
-          metadata: { type: 'research_report' },
-        });
-      } catch {}
-    }
-
-    try {
-      const reportStore = getReportStore();
-      if (reportStore && report) {
-        await reportStore.setJSON(`report-${conversationId}-${Date.now()}`, {
-          question, depth, subQuestions, papers, articles, report,
-          createdAt: new Date().toISOString(), conversationId,
-        });
-        logger.log('Report archived to Blob');
-      }
-    } catch (e) {
-      logger.log('Blob archive skipped:', (e as Error).message);
-    }
-
     logger.log('Research complete');
   } catch (e: any) {
     if (e.name === 'AbortError' || signal?.aborted) {
@@ -802,19 +917,95 @@ async function* streamResearch(
       yield sseEvent({ type: 'error_message', content: 'Research tools completed but report generation was interrupted. Please try again.' });
     } else if (e.message?.includes('terminated')) {
       logger.log('Stream terminated by runtime (likely timeout)');
-      // Report was partially generated via streaming — mark as complete with what we have
       if (report) {
         report += '\n\n---\n*[Note: Report generation was interrupted due to connection timeout. The above content is partial.]*';
-        yield sseEvent({ type: 'subagent_lifecycle', status: 'complete', agent: 'synthesizer', id: 'stage-4' });
       }
     } else {
       logger.error('Agent error:', e.message);
-      yield sseEvent({ type: 'error_message', content: e.message });
+      // Don't emit error to user if we already have a partial report — we'll try to continue
+      if (!report) {
+        yield sseEvent({ type: 'error_message', content: e.message });
+      } else {
+        logger.log(`Agent ended with error but report exists (len=${report.length}), attempting continuation...`);
+      }
     }
-    // If we have a partial report from streaming, mark synthesizer complete
-    if (report && !signal?.aborted) {
-      yield sseEvent({ type: 'subagent_lifecycle', status: 'complete', agent: 'synthesizer', id: 'stage-4' });
+  }
+
+  // ─── Continuation: detect if report was cut short and continue (with retry loop) ───
+  const MAX_CONTINUATIONS = 15;
+  for (let attempt = 0; attempt < MAX_CONTINUATIONS && !signal?.aborted; attempt++) {
+    // No report at all — nothing to continue
+    if (!report || report.length === 0) break;
+
+    const reportLower = report.toLowerCase();
+    const hasConclusion = reportLower.includes('## 结论') || reportLower.includes('## conclusion') ||
+      reportLower.includes('## 总结') || reportLower.includes('## summary');
+    const hasReferences = reportLower.includes('## 参考') || reportLower.includes('## references') ||
+      reportLower.includes('## 引用');
+
+    // If the report has BOTH conclusion AND references, it's complete
+    if (hasConclusion && hasReferences) {
+      logger.log(`Report appears complete (len=${report.length}). No continuation needed.`);
+      break;
     }
+
+    logger.log(`Report incomplete (attempt ${attempt + 1}/${MAX_CONTINUATIONS}, len=${report.length}, hasConclusion=${hasConclusion}, hasReferences=${hasReferences}). Continuing...`);
+
+    try {
+      const continueAgent = new Agent({
+        name: "report-continuator",
+        instructions: `You are continuing an incomplete research report. The previous output was cut short. Continue writing from EXACTLY where it left off — do NOT add any prefix, greeting, or "continued from" note. Do NOT repeat any content that already exists. Complete ALL remaining sections. The report MUST end with a "## 结论" (or "## Conclusion") section AND a "## 参考文献" (or "## References") section. Do NOT use "结论/总结" or "参考文献/参考文献" — pick ONE name for each section heading. Write in the same language as the existing content. Output ONLY the continuation text. Write as MUCH content as possible — aim for at least 2000 characters.`,
+        model: getModel(),
+        tools: [],
+        modelSettings: { maxTokens: 65536 },
+      });
+
+      const continueInput = [
+        { role: "user" as const, content: `The following research report was cut short at ${report.length} characters. Continue writing from where it stopped. You MUST output substantial content (at least 2000 characters). Complete the report with all remaining sections, conclusion, and references:\n\n---\n${report.slice(-3000)}` },
+      ];
+
+      const continueResult = await run(continueAgent, continueInput as any, {
+        stream: true, signal, maxTurns: 3, modelSettings: { maxTokens: 65536 },
+      });
+
+      let continuation = '';
+      for await (const event of continueResult) {
+        if (signal?.aborted) break;
+        if (event.type === "raw_model_stream_event") {
+          const data = (event as any).data;
+          if (data?.type === 'output_text_delta' && data.delta) {
+            const text = data.delta;
+            if (!text.includes('<think>') && !text.includes('</think>')) {
+              continuation += text;
+              report += text;
+              yield sseEvent({ type: 'ai_response', content: text, agent: 'synthesizer' });
+            }
+          }
+          if (data?.type === 'response.completed' || data?.type === 'response.done') {
+            const usage = data?.response?.usage || data?.usage;
+            if (usage) {
+              totalOutputTokens += usage.output_tokens || usage.completion_tokens || 0;
+            }
+          }
+        }
+      }
+      await continueResult.completed;
+      logger.log(`Continuation ${attempt + 1} added ${continuation.length} chars (total report: ${report.length} chars)`);
+
+      // If continuation added nothing, stop retrying
+      if (continuation.length < 10) {
+        logger.log('Continuation produced no meaningful output, stopping');
+        break;
+      }
+    } catch (e: any) {
+      logger.log(`Continuation ${attempt + 1} failed: ${e.message}`);
+      // Don't break — try again
+    }
+  }
+
+  // Mark synthesizer as complete (only once, after any continuation)
+  if (report) {
+    yield sseEvent({ type: 'subagent_lifecycle', status: 'complete', agent: 'synthesizer', id: 'stage-4' });
   }
 
   // Persist report (even partial) to Memory + Blob/Project
@@ -876,7 +1067,7 @@ async function* streamResearch(
 export async function onRequest(context: any) {
   const { request } = context;
   const body = request?.body ?? {};
-  const { message, question: questionField, depth = 'standard', projectId, urls } = body;
+  const { message, question: questionField, depth = 'standard', projectId, urls, confirmedSubQuestions, decomposeOnly } = body;
   const question = message || questionField || '';
 
   if (!question) {
@@ -915,6 +1106,8 @@ export async function onRequest(context: any) {
     urls: Array.isArray(urls) ? urls.filter((u: any) => typeof u === 'string' && u.startsWith('http')) : undefined,
     previousReport,
     isFollowUp,
+    confirmedSubQuestions: Array.isArray(confirmedSubQuestions) ? confirmedSubQuestions : undefined,
+    decomposeOnly: !!decomposeOnly,
   };
   const generator = streamResearch(question, opts, context, signal);
   return createSSEResponse(generator, signal);
