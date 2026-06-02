@@ -161,7 +161,7 @@ async function sandboxExec(
     if (sandbox && typeof sandbox.commands?.run === "function") {
       const result = await ensureSandboxInitialized(() =>
         sandbox.commands.run(command, { timeout })
-      );
+      ) as any;
       return {
         stdout: result?.stdout ?? result?.output ?? "",
         stderr: result?.stderr ?? "",

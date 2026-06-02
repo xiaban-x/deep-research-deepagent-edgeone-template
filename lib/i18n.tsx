@@ -72,11 +72,24 @@ export const translations = {
     ignoreBtn: '忽略',
     regeneratingReport: '正在重新生成报告...',
     urlDetected: '检测到URL，将自动抓取内容',
+    // Version management
+    cancelCompare: '取消对比',
+    selectTwoVersions: '选择两个版本进行对比 ({n}/2)',
+    projectCreated: '项目 {name} 已创建成功！在下方输入研究问题，开始第一次深度研究。',
+    regenerationComplete: '✅ 报告已重新生成完成。',
+    // Sub-question confirm
+    confirmSubQuestions: '确认研究子问题',
+    subQuestionsDescription: '以下是为您的研究问题分解出的子问题，您可以编辑、添加或删除后再开始研究。',
+    addSubQuestion: '添加子问题',
+    confirmAndStart: '确认并开始研究',
+    deleteSubQuestion: '删除',
     // Diff
     diffTitle: '版本对比',
     added: '新增',
     removed: '删除',
     close: '关闭',
+    cancel: '取消',
+    confirm: '确认',
     quotaExhausted: 'AI 模型调用额度已用尽，请稍后再试或升级套餐。',
   },
   en: {
@@ -146,11 +159,24 @@ export const translations = {
     ignoreBtn: 'Ignore',
     regeneratingReport: 'Regenerating report...',
     urlDetected: 'URL detected — content will be scraped',
+    // Version management
+    cancelCompare: 'Cancel',
+    selectTwoVersions: 'Select 2 versions to compare ({n}/2)',
+    projectCreated: 'Project {name} created! Enter a research question below to start your first deep research.',
+    regenerationComplete: '✅ Report has been regenerated successfully.',
+    // Sub-question confirm
+    confirmSubQuestions: 'Confirm Sub-questions',
+    subQuestionsDescription: 'The following sub-questions were generated for your research topic. You can edit, add, or remove them before starting.',
+    addSubQuestion: 'Add sub-question',
+    confirmAndStart: 'Confirm & Start Research',
+    deleteSubQuestion: 'Delete',
     // Diff
     diffTitle: 'Version Comparison',
     added: 'Added',
     removed: 'Removed',
     close: 'Close',
+    cancel: 'Cancel',
+    confirm: 'Confirm',
     quotaExhausted: 'AI model quota exhausted. Please try again later or upgrade your plan.',
   },
 };

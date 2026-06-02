@@ -35,7 +35,7 @@ export function SourceCard({ source }: SourceCardProps) {
               )}
               <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-500">
                 {source.journal && <span>{source.journal}</span>}
-                {source.year && <span>{source.year}</span>}
+                {source.year ? <span>{source.year}</span> : null}
               </div>
             </div>
           ) : (

@@ -50,7 +50,7 @@ export function ProjectSelector({
     return (
       <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 text-center space-y-4">
         <div className="text-neutral-500 dark:text-neutral-400 text-sm">
-          还没有研究项目，创建一个开始吧
+          {t.noProjects}
         </div>
         <button
           onClick={() => setIsCreating(true)}
@@ -59,7 +59,7 @@ export function ProjectSelector({
           <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          新建项目
+          {t.newProject}
         </button>
       </div>
     );
@@ -75,7 +75,7 @@ export function ProjectSelector({
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            placeholder="输入项目名称..."
+            placeholder={t.projectName}
             className="w-full bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 dark:focus:ring-blue-400/40 dark:focus:border-blue-400 dark:text-neutral-100 placeholder:text-neutral-400 transition-all"
             autoFocus
           />
@@ -84,14 +84,14 @@ export function ProjectSelector({
               onClick={() => { setIsCreating(false); setNewName(''); }}
               className="px-3 py-1.5 rounded-md text-xs font-medium text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
             >
-              取消
+              {t.cancel}
             </button>
             <button
               onClick={handleCreate}
               disabled={!newName.trim()}
               className="px-4 py-1.5 rounded-md text-xs font-medium text-white bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm transition-all"
             >
-              创建项目
+              {t.createProject}
             </button>
           </div>
         </div>
@@ -103,7 +103,7 @@ export function ProjectSelector({
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          新建项目
+          {t.newProject}
         </button>
       )}
 
@@ -135,13 +135,13 @@ export function ProjectSelector({
                   onClick={() => handleDelete(project.id)}
                   className="text-xs px-2 py-1 rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
                 >
-                  确认
+                  {t.confirm}
                 </button>
                 <button
                   onClick={() => setDeleteConfirmId(null)}
                   className="text-xs px-2 py-1 rounded text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
                 >
-                  取消
+                  {t.cancel}
                 </button>
               </div>
             ) : (

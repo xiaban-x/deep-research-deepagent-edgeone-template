@@ -108,7 +108,7 @@ async function* streamChat(
       signal,
       maxTurns: 3,
       modelSettings: { maxTokens: 4096 },
-    });
+    } as any) as any;
 
     for await (const event of result) {
       if (signal?.aborted) break;

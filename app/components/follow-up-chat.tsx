@@ -24,9 +24,10 @@ interface FollowUpChatProps {
   isRegenerating: boolean;
   projectId: string;
   report: string;
+  completionTick?: number;
 }
 
-export function FollowUpChat({ onRegenerate, onAddSource, isRegenerating, projectId, report }: FollowUpChatProps) {
+export function FollowUpChat({ onRegenerate, onAddSource, isRegenerating, projectId, report, completionTick = 0 }: FollowUpChatProps) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -38,6 +39,20 @@ export function FollowUpChat({ onRegenerate, onAddSource, isRegenerating, projec
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const chatLoaded = useRef(false);
+  const lastHandledTickRef = useRef(-1);
+
+  // Post a completion message when research/regeneration finishes
+  useEffect(() => {
+    if (completionTick > 0 && completionTick !== lastHandledTickRef.current) {
+      lastHandledTickRef.current = completionTick;
+      setMessages(prev => [...prev, {
+        id: `assistant-done-${Date.now()}`,
+        role: 'assistant' as const,
+        content: t.regenerationComplete,
+        isStreaming: false,
+      }]);
+    }
+  }, [completionTick, t.regenerationComplete]);
 
   // Load chat history from Blob on mount
   useEffect(() => {
@@ -62,21 +77,40 @@ export function FollowUpChat({ onRegenerate, onAddSource, isRegenerating, projec
 
   // Save chat history to Blob whenever messages change (debounced)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep a ref to latest messages so the cleanup function can flush on unmount
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  const flushSave = useCallback((msgs: ChatMessage[]) => {
+    const toSave = msgs.filter(m => !m.isStreaming && m.content);
+    if (!projectId || toSave.length === 0) return;
+    fetch('/project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'save_chat', id: projectId, messages: toSave }),
+    }).catch(() => {});
+  }, [projectId]);
+
   useEffect(() => {
     if (!projectId || messages.length === 0) return;
     // Debounce saves to avoid spamming the API
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const toSave = messages.filter(m => !m.isStreaming && m.content);
-      if (toSave.length === 0) return;
-      fetch('/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'save_chat', id: projectId, messages: toSave }),
-      }).catch(() => {}); // Silently fail if Blob unavailable
+      flushSave(messagesRef.current);
     }, 2000);
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [messages, projectId]);
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [messages, projectId, flushSave]);
+
+  // Flush immediately on unmount so messages aren't lost when research restarts
+  useEffect(() => {
+    return () => { flushSave(messagesRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -203,15 +237,12 @@ export function FollowUpChat({ onRegenerate, onAddSource, isRegenerating, projec
   };
 
   const handleRegenerate = useCallback(() => {
-    // Build a summary of the conversation for context
-    const chatSummary = messages
-      .slice(-10)
-      .map(m => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content.slice(0, 200)}`)
-      .join('\n');
-    const fullSummary = regenerateSuggestion
-      ? `${regenerateSuggestion}\n\n对话上下文:\n${chatSummary}`
-      : chatSummary;
-    onRegenerate(fullSummary);
+    // Use only the AI's concise one-sentence suggestion as the modification request.
+    // Sending the full chat history confuses the report-editor agent with conversational noise.
+    // Fall back to the user's last message if no suggestion exists.
+    const summary = regenerateSuggestion ||
+      messages.filter(m => m.role === 'user').slice(-1).map(m => m.content).join('');
+    onRegenerate(summary);
     setShowRegenerate(false);
   }, [messages, regenerateSuggestion, onRegenerate]);
 

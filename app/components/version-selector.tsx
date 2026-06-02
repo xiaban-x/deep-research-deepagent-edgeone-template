@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { useI18n } from '@/lib/i18n';
 
 interface Version {
   version: number;
@@ -23,6 +24,7 @@ export function VersionSelector({
   onSelectVersion,
   onDiff,
 }: VersionSelectorProps) {
+  const { t } = useI18n();
   const [compareMode, setCompareMode] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
 
@@ -59,12 +61,12 @@ export function VersionSelector({
       {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-          版本历史
+          {t.versions}
         </h3>
         <div className="flex items-center gap-2">
           {compareMode && selected.length === 2 && (
             <Button size="sm" onClick={handleCompare}>
-              对比
+              {t.compareVersions}
             </Button>
           )}
           <Button
@@ -75,7 +77,7 @@ export function VersionSelector({
               setSelected([]);
             }}
           >
-            {compareMode ? '取消对比' : '对比版本'}
+            {compareMode ? t.cancelCompare : t.compareVersions}
           </Button>
         </div>
       </div>
@@ -106,7 +108,7 @@ export function VersionSelector({
                 </span>
                 {isCurrent && !compareMode && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300">
-                    当前
+                    {t.currentVersion}
                   </span>
                 )}
                 {isSelected && (
@@ -129,7 +131,7 @@ export function VersionSelector({
       {/* Compare mode hint */}
       {compareMode && selected.length < 2 && (
         <p className="text-xs text-neutral-400 dark:text-neutral-500">
-          选择两个版本进行对比 ({selected.length}/2)
+          {t.selectTwoVersions.replace('{n}', String(selected.length))}
         </p>
       )}
     </div>

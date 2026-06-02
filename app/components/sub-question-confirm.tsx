@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
+import { useI18n } from '@/lib/i18n';
 
 interface SubQuestionConfirmProps {
   questions: string[];
@@ -10,6 +11,7 @@ interface SubQuestionConfirmProps {
 }
 
 export function SubQuestionConfirm({ questions, onConfirm, onCancel }: SubQuestionConfirmProps) {
+  const { t } = useI18n();
   const [editableQuestions, setEditableQuestions] = useState<string[]>(questions);
   const textareaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
 
@@ -52,10 +54,10 @@ export function SubQuestionConfirm({ questions, onConfirm, onCancel }: SubQuesti
           <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          确认研究子问题
+          {t.confirmSubQuestions}
         </h3>
         <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">
-          以下是为您的研究问题分解出的子问题，您可以编辑、添加或删除后再开始研究。
+          {t.subQuestionsDescription}
         </p>
       </CardHeader>
       <CardContent>
@@ -81,7 +83,7 @@ export function SubQuestionConfirm({ questions, onConfirm, onCancel }: SubQuesti
               <button
                 onClick={() => handleRemove(i)}
                 className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-neutral-400 hover:text-red-500 transition-colors mt-0.5"
-                title="删除"
+                title={t.deleteSubQuestion}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -98,7 +100,7 @@ export function SubQuestionConfirm({ questions, onConfirm, onCancel }: SubQuesti
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            添加子问题
+            {t.addSubQuestion}
           </button>
         </div>
 
@@ -112,13 +114,13 @@ export function SubQuestionConfirm({ questions, onConfirm, onCancel }: SubQuesti
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
-            确认并开始研究
+            {t.confirmAndStart}
           </button>
           <button
             onClick={onCancel}
             className="px-4 py-2.5 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-sm text-neutral-600 dark:text-neutral-400 font-medium transition-colors"
           >
-            取消
+            {t.cancel}
           </button>
         </div>
       </CardContent>

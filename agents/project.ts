@@ -2,36 +2,60 @@
  * Research Project Management — CRUD for persistent research projects with versioning.
  *
  * POST /project
- * Actions: create, list, get, delete, get_version, diff
+ * Actions: create, list, get, delete, get_version, diff,
+ *          save_version, save_chat, get_chat
  *
- * Blob Storage Schema:
- *   projects-index          → { projects: [{id, name, createdAt, versionCount}] }
- *   project-{id}/meta       → { id, name, createdAt, updatedAt, versionCount }
- *   project-{id}/v{N}       → Full version data (report + sources)
+ * Storage: context.store (injected by Makers runtime — no env vars needed)
+ *
+ * Key convention (conversationId):
+ *   projects-index          → manifest: [{ id, name, createdAt, versionCount }]
+ *   project-{id}-meta       → { id, name, createdAt, updatedAt, versionCount }
+ *   project-{id}-v{N}       → Full version data (report + sources)
+ *   project-{id}-chat       → { messages, updatedAt }
  */
-import { getStore } from '@edgeone/pages-blob';
 import { createLogger } from './_shared';
 
 const logger = createLogger('project');
 
-function getProjectStore() {
-  const projectId = process.env.PROJECT_ID || process.env.EDGEONE_PROJECT_ID || process.env.ProjectId;
-  const token = process.env.EDGEONE_PAGES_API_TOKEN;
-  if (projectId && token) {
-    return getStore({ name: 'research-projects', projectId, token });
+// ─── Storage helpers ──────────────────────────────────────────────────────────
+
+async function storeGet(store: any, key: string): Promise<any> {
+  const messages = await store.getMessages({ conversationId: key, limit: 1, order: 'desc' });
+  if (messages.length > 0 && messages[0].content) {
+    const content = messages[0].content;
+    return typeof content === 'string' ? JSON.parse(content) : content;
   }
-  try { return getStore('research-projects'); } catch { return null; }
+  return null;
 }
 
+async function storeSet(store: any, key: string, data: unknown, metadataType?: string): Promise<void> {
+  try { await store.clearMessages({ conversationId: key }); } catch {}
+  await store.appendMessage({
+    conversationId: key,
+    role: 'system',
+    content: JSON.stringify(data),
+    ...(metadataType ? { metadata: { type: metadataType } } : {}),
+  });
+}
+
+async function storeDel(store: any, key: string): Promise<void> {
+  try { await store.clearMessages({ conversationId: key }); } catch {}
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=UTF-8' } });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+  });
 }
 
 function generateId(): string {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ProjectMeta {
   id: string;
@@ -45,16 +69,15 @@ interface ProjectIndex {
   projects: Array<{ id: string; name: string; createdAt: string; versionCount: number }>;
 }
 
-// ─── Handler ─────────────────────────────────────────────────────────────────
+// ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function onRequest(context: any) {
-  const { request } = context;
+  const { request, store } = context;
   const body = request?.body ?? {};
   const { action } = body;
 
-  const store = getProjectStore();
   if (!store) {
-    return json({ error: 'Blob storage not available (deploy to EdgeOne Pages for persistence)' }, 503);
+    return json({ error: 'Storage not available (deploy to EdgeOne Makers)' }, 503);
   }
 
   try {
@@ -70,17 +93,11 @@ export async function onRequest(context: any) {
         const now = new Date().toISOString();
         const meta: ProjectMeta = { id, name: name.trim(), createdAt: now, updatedAt: now, versionCount: 0 };
 
-        // Save project meta
-        await store.setJSON(`${id}/meta`, meta);
+        await storeSet(store, `project-${id}-meta`, meta, 'project-meta');
 
-        // Update index
-        let index: ProjectIndex = { projects: [] };
-        try {
-          const existing = await store.get('projects-index', { type: 'json' }) as ProjectIndex | null;
-          if (existing?.projects) index = existing;
-        } catch {}
+        const index: ProjectIndex = (await storeGet(store, 'projects-index')) || { projects: [] };
         index.projects.unshift({ id, name: meta.name, createdAt: now, versionCount: 0 });
-        await store.setJSON('projects-index', index);
+        await storeSet(store, 'projects-index', index, 'projects-index');
 
         logger.log(`Created project: ${id} "${name}"`);
         return json({ project: meta });
@@ -88,11 +105,7 @@ export async function onRequest(context: any) {
 
       // ─── List Projects ───────────────────────────────────────────────
       case 'list': {
-        let index: ProjectIndex = { projects: [] };
-        try {
-          const existing = await store.get('projects-index', { type: 'json' }) as ProjectIndex | null;
-          if (existing?.projects) index = existing;
-        } catch {}
+        const index: ProjectIndex = (await storeGet(store, 'projects-index')) || { projects: [] };
         return json({ projects: index.projects });
       }
 
@@ -101,23 +114,20 @@ export async function onRequest(context: any) {
         const { id } = body;
         if (!id) return json({ error: 'Missing project id' }, 400);
 
-        const meta = await store.get(`${id}/meta`, { type: 'json' }) as ProjectMeta | null;
+        const meta = await storeGet(store, `project-${id}-meta`) as ProjectMeta | null;
         if (!meta) return json({ error: 'Project not found' }, 404);
 
-        // Get version summaries (without full report content)
         const versions: Array<{ version: number; question: string; trigger: string; createdAt: string }> = [];
         for (let i = 1; i <= meta.versionCount; i++) {
-          try {
-            const v = await store.get(`${id}/v${i}`, { type: 'json' }) as any;
-            if (v) {
-              versions.push({
-                version: i,
-                question: v.question || '',
-                trigger: v.trigger || 'initial',
-                createdAt: v.createdAt || '',
-              });
-            }
-          } catch {}
+          const v = await storeGet(store, `project-${id}-v${i}`);
+          if (v) {
+            versions.push({
+              version: i,
+              question: v.question || '',
+              trigger: v.trigger || 'initial',
+              createdAt: v.createdAt || '',
+            });
+          }
         }
 
         return json({ project: meta, versions });
@@ -128,7 +138,7 @@ export async function onRequest(context: any) {
         const { id, version } = body;
         if (!id || !version) return json({ error: 'Missing id or version' }, 400);
 
-        const data = await store.get(`${id}/v${version}`, { type: 'json' });
+        const data = await storeGet(store, `project-${id}-v${version}`);
         if (!data) return json({ error: 'Version not found' }, 404);
 
         return json({ version: data });
@@ -139,9 +149,8 @@ export async function onRequest(context: any) {
         const { id, v1, v2 } = body;
         if (!id || !v1 || !v2) return json({ error: 'Missing id, v1, or v2' }, 400);
 
-        const version1 = await store.get(`${id}/v${v1}`, { type: 'json' }) as any;
-        const version2 = await store.get(`${id}/v${v2}`, { type: 'json' }) as any;
-
+        const version1 = await storeGet(store, `project-${id}-v${v1}`);
+        const version2 = await storeGet(store, `project-${id}-v${v2}`);
         if (!version1 || !version2) return json({ error: 'One or both versions not found' }, 404);
 
         return json({
@@ -155,23 +164,20 @@ export async function onRequest(context: any) {
         const { id } = body;
         if (!id) return json({ error: 'Missing project id' }, 400);
 
-        const meta = await store.get(`${id}/meta`, { type: 'json' }) as ProjectMeta | null;
+        const meta = await storeGet(store, `project-${id}-meta`) as ProjectMeta | null;
         if (!meta) return json({ error: 'Project not found' }, 404);
 
-        // Delete all versions + meta
         for (let i = 1; i <= meta.versionCount; i++) {
-          try { await store.delete(`${id}/v${i}`); } catch {}
+          await storeDel(store, `project-${id}-v${i}`);
         }
-        await store.delete(`${id}/meta`);
+        await storeDel(store, `project-${id}-meta`);
+        await storeDel(store, `project-${id}-chat`);
 
-        // Update index
-        try {
-          const existing = await store.get('projects-index', { type: 'json' }) as ProjectIndex | null;
-          if (existing?.projects) {
-            existing.projects = existing.projects.filter(p => p.id !== id);
-            await store.setJSON('projects-index', existing);
-          }
-        } catch {}
+        const index = await storeGet(store, 'projects-index') as ProjectIndex | null;
+        if (index?.projects) {
+          index.projects = index.projects.filter(p => p.id !== id);
+          await storeSet(store, 'projects-index', index, 'projects-index');
+        }
 
         logger.log(`Deleted project: ${id}`);
         return json({ success: true });
@@ -182,35 +188,28 @@ export async function onRequest(context: any) {
         const { id, versionData } = body;
         if (!id || !versionData) return json({ error: 'Missing id or versionData' }, 400);
 
-        // Get current meta
-        let meta = await store.get(`${id}/meta`, { type: 'json' }) as ProjectMeta | null;
+        const meta = await storeGet(store, `project-${id}-meta`) as ProjectMeta | null;
         if (!meta) return json({ error: 'Project not found' }, 404);
 
-        // Increment version
         const newVersion = meta.versionCount + 1;
         const now = new Date().toISOString();
 
-        // Save version data
-        await store.setJSON(`${id}/v${newVersion}`, {
+        await storeSet(store, `project-${id}-v${newVersion}`, {
           ...versionData,
           version: newVersion,
           createdAt: now,
-        });
+        }, 'project-version');
 
-        // Update meta
         meta.versionCount = newVersion;
         meta.updatedAt = now;
-        await store.setJSON(`${id}/meta`, meta);
+        await storeSet(store, `project-${id}-meta`, meta, 'project-meta');
 
-        // Update index
-        try {
-          const existing = await store.get('projects-index', { type: 'json' }) as ProjectIndex | null;
-          if (existing?.projects) {
-            const proj = existing.projects.find(p => p.id === id);
-            if (proj) proj.versionCount = newVersion;
-            await store.setJSON('projects-index', existing);
-          }
-        } catch {}
+        const index = await storeGet(store, 'projects-index') as ProjectIndex | null;
+        if (index?.projects) {
+          const proj = index.projects.find(p => p.id === id);
+          if (proj) proj.versionCount = newVersion;
+          await storeSet(store, 'projects-index', index, 'projects-index');
+        }
 
         logger.log(`Saved version ${newVersion} for project ${id}`);
         return json({ success: true, version: newVersion });
@@ -220,7 +219,7 @@ export async function onRequest(context: any) {
       case 'save_chat': {
         const { id, messages } = body;
         if (!id || !Array.isArray(messages)) return json({ error: 'Missing id or messages' }, 400);
-        await store.setJSON(`${id}/chat`, { messages, updatedAt: new Date().toISOString() });
+        await storeSet(store, `project-${id}-chat`, { messages, updatedAt: new Date().toISOString() }, 'project-chat');
         return json({ success: true });
       }
 
@@ -228,15 +227,24 @@ export async function onRequest(context: any) {
       case 'get_chat': {
         const { id } = body;
         if (!id) return json({ error: 'Missing id' }, 400);
-        const chatData = await store.get(`${id}/chat`, { type: 'json' }) as any;
+        const chatData = await storeGet(store, `project-${id}-chat`);
         return json({ messages: chatData?.messages || [] });
       }
 
       default:
         return json({ error: 'Unknown action. Use: create, list, get, get_version, diff, delete, save_version, save_chat, get_chat' }, 400);
     }
-  } catch (e) {
-    logger.error((e as Error).message);
-    return json({ error: (e as Error).message }, 500);
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    const isStorageError =
+      e?.code === 'CREDENTIAL_ERROR' ||
+      msg.includes('credential') ||
+      msg.includes('Invalid project') ||
+      msg.includes('Memory storage operation failed');
+    if (isStorageError) {
+      return json({ error: 'Storage not available (deploy to EdgeOne Makers)' }, 503);
+    }
+    logger.error(msg);
+    return json({ error: msg }, 500);
   }
 }

@@ -57,7 +57,7 @@ interface DiffData {
 }
 
 export default function Home() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [isResearching, setIsResearching] = useState(false);
   const [subagents, setSubagents] = useState<SubagentEvent[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
@@ -86,6 +86,9 @@ export default function Home() {
 
   // Diff state
   const [diffData, setDiffData] = useState<DiffData | null>(null);
+
+  // Tick counter to signal FollowUpChat when research/regeneration completes
+  const [researchCompleteTick, setResearchCompleteTick] = useState(0);
 
   // Load projects on mount
   useEffect(() => { loadProjects(); }, []);
@@ -168,7 +171,8 @@ export default function Home() {
     } catch {}
   };
 
-  const handleCreateProject = async (name: string) => {
+  // Shared helper: creates a project, updates state, and returns the new project id
+  const createProject = async (name: string): Promise<string | null> => {
     try {
       const res = await fetch('/project', {
         method: 'POST',
@@ -177,12 +181,10 @@ export default function Home() {
       });
       if (res.ok) {
         const { project } = await res.json();
-        // Optimistic update: immediately add to local state
         setProjects(prev => [
           { id: project.id, name: project.name, createdAt: project.createdAt, versionCount: 0 },
           ...prev,
         ]);
-        // Clear old project state before selecting the new one
         setReport('');
         setSources([]);
         setSubagents([]);
@@ -192,8 +194,14 @@ export default function Home() {
         setDiffData(null);
         setTokenUsage({ input: 0, output: 0 });
         setSelectedProjectId(project.id);
+        return project.id;
       }
     } catch {}
+    return null;
+  };
+
+  const handleCreateProject = async (name: string) => {
+    await createProject(name);
   };
 
   const handleDeleteProject = async (id: string) => {
@@ -251,8 +259,15 @@ export default function Home() {
     setPendingQuestion(question);
     setPendingDepth(depth);
 
+    // Auto-create a project named after the research question when none is selected
+    let effectiveProjectId = selectedProjectId;
+    if (!effectiveProjectId) {
+      const truncatedName = question.length > 60 ? question.slice(0, 60) + '…' : question;
+      effectiveProjectId = await createProject(truncatedName);
+    }
+
     // Phase 1: decompose only
-    await streamResearch({ message: question, depth, projectId: selectedProjectId || undefined, decomposeOnly: true });
+    await streamResearch({ message: question, depth, projectId: effectiveProjectId || undefined, decomposeOnly: true, locale });
   }, [selectedProjectId]);
 
   // Phase 2: user confirmed sub-questions, proceed with full research
@@ -269,6 +284,7 @@ export default function Home() {
       depth: pendingDepth,
       projectId: selectedProjectId || undefined,
       confirmedSubQuestions: confirmedQuestions,
+      locale,
     });
   }, [selectedProjectId, pendingQuestion, pendingDepth]);
 
@@ -284,7 +300,10 @@ export default function Home() {
       message: chatSummary,
       depth: 'standard',
       projectId: selectedProjectId || undefined,
+      locale,
     });
+    // Signal FollowUpChat that regeneration is complete (only fires for regeneration, not initial research)
+    setResearchCompleteTick(c => c + 1);
   }, [selectedProjectId]);
 
   // Add a source to the left panel (triggered from chat suggest_add_source)
@@ -445,35 +464,43 @@ export default function Home() {
     } finally {
       setIsResearching(false);
       abortControllerRef.current = null;
-      if (selectedProjectId && lastReport) {
-        // Save version directly from frontend (more reliable than backend internal invoke)
-        try {
-          const papers = lastSources.filter(s => s.type === 'academic');
-          const articles = lastSources.filter(s => s.type === 'web');
-          await fetch('/project', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'save_version',
-              id: selectedProjectId,
-              versionData: {
-                question: body.message || '',
-                depth: body.depth || 'standard',
-                papers,
-                articles,
-                report: lastReport,
-                trigger: versions.length > 0 ? 'follow-up' : 'initial',
-              },
-            }),
-          });
-        } catch {}
-        // Reload versions after save; retry once if count hasn't increased
+      // Use body.projectId first to handle the auto-create case where selectedProjectId
+      // may still be null in this closure (React state update hasn't re-rendered yet)
+      const effectiveProjectId = (body.projectId as string) || selectedProjectId;
+      if (effectiveProjectId && lastReport) {
+        // Wait briefly for backend blob write propagation (backend saves via context.agents.invoke)
+        await new Promise(r => setTimeout(r, 800));
         const prevCount = versions.length;
-        const newCount = await loadProjectVersions(selectedProjectId);
+        const newCount = await loadProjectVersions(effectiveProjectId);
+
         if (newCount <= prevCount) {
-          await new Promise(r => setTimeout(r, 2000));
-          await loadProjectVersions(selectedProjectId);
+          // Backend save didn't run (local dev / context.agents unavailable) — frontend fallback
+          try {
+            const papers = lastSources.filter(s => s.type === 'academic');
+            const articles = lastSources.filter(s => s.type === 'web');
+            await fetch('/project', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'save_version',
+                id: effectiveProjectId,
+                versionData: {
+                  question: body.message || '',
+                  depth: body.depth || 'standard',
+                  papers,
+                  articles,
+                  scrapedUrls: [],
+                  report: lastReport,
+                  trigger: prevCount > 0 ? 'follow-up' : 'initial',
+                },
+              }),
+            });
+          } catch {}
+          // Wait for blob write then reload
+          await new Promise(r => setTimeout(r, 500));
+          await loadProjectVersions(effectiveProjectId);
         }
+
         await loadProjects();
       }
     }
@@ -560,7 +587,7 @@ export default function Home() {
                   <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <span>项目 <strong>{selectedProject?.name}</strong> 已创建成功！在下方输入研究问题，开始第一次深度研究。</span>
+                  <span dangerouslySetInnerHTML={{ __html: t.projectCreated.replace('{name}', `<strong>${selectedProject?.name ?? ''}</strong>`) }} />
                 </div>
               )}
               <ResearchForm key={selectedProjectId || '__none__'} onSubmit={handleResearch} isLoading={isResearching} />
@@ -636,6 +663,7 @@ export default function Home() {
                 isRegenerating={isResearching}
                 projectId={selectedProjectId || ''}
                 report={report}
+                completionTick={researchCompleteTick}
               />
             </div>
           )}

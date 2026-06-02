@@ -13,7 +13,6 @@
  * Streaming via SSE: tool_call events map to progress stages on the frontend.
  */
 import { z } from "zod";
-import { getStore } from '@edgeone/pages-blob';
 import {
   Agent,
   run,
@@ -32,35 +31,6 @@ const logger = createLogger('research');
 if (!process.env.OPENAI_AGENTS_DISABLE_TRACING) {
   process.env.OPENAI_AGENTS_DISABLE_TRACING = 'true';
 }
-
-// ─── Blob Store ──────────────────────────────────────────────────────────────
-
-function getReportStore() {
-  const projectId = process.env.PROJECT_ID || process.env.EDGEONE_PROJECT_ID || process.env.ProjectId;
-  const token = process.env.EDGEONE_PAGES_API_TOKEN;
-  if (projectId && token) {
-    return getStore({ name: 'research-reports', projectId, token });
-  }
-  try { return getStore('research-reports'); } catch { return null; }
-}
-
-// ─── Mock Data ───────────────────────────────────────────────────────────────
-
-const MOCK_PAPERS = [
-  { title: 'Quantum Error Correction with Surface Codes: A Comprehensive Review', authors: 'Chen, L., Wang, M., & Park, S.', journal: 'Physical Review Letters', year: 2024, doi: '10.1103/PhysRevLett.132.040601', abstract: 'We present a comprehensive review of surface code implementations for quantum error correction.' },
-  { title: 'Large Language Models as Research Assistants: Capabilities and Limitations', authors: 'Thompson, R., Garcia, A., & Kim, J.', journal: 'Nature Machine Intelligence', year: 2024, doi: '10.1038/s42256-024-0812-3', abstract: 'This study evaluates the effectiveness of large language models in assisting scientific research.' },
-  { title: 'Transformer Architectures for Scientific Discovery', authors: 'Liu, H., Patel, N., & Brown, K.', journal: 'Science', year: 2025, doi: '10.1126/science.abq1234', abstract: 'Novel transformer architectures specifically designed for scientific hypothesis generation.' },
-  { title: 'Sustainable AI: Environmental Impact of Training Large Models', authors: 'Mueller, F., Santos, P., & Johnson, D.', journal: 'Nature Climate Change', year: 2024, doi: '10.1038/s41558-024-1987-2', abstract: 'Carbon footprint of training large AI models has decreased by 40% through efficiency improvements.' },
-  { title: 'Brain-Computer Interfaces: From Laboratory to Clinical Practice', authors: 'Yamamoto, K., Fischer, E., & O\'Brien, T.', journal: 'The Lancet Neurology', year: 2025, doi: '10.1016/S1474-4422(25)00034-1', abstract: 'Review of brain-computer interfaces transitioning from research to clinical applications.' },
-];
-
-const MOCK_ARTICLES = [
-  { title: 'The Race to Build a Practical Quantum Computer', url: 'https://www.technologyreview.com/2025/quantum-computing-race', source: 'MIT Technology Review', date: '2025-03-15', snippet: 'Major tech companies are competing to achieve quantum advantage in practical applications.' },
-  { title: 'AI Research Tools Are Changing How Scientists Work', url: 'https://www.nature.com/articles/d41586-025-00892-3', source: 'Nature News', date: '2025-02-28', snippet: 'A growing number of research institutions are adopting AI-powered tools for literature review.' },
-  { title: 'OpenAI Announces New Research-Focused Model Architecture', url: 'https://openai.com/blog/research-model-2025', source: 'OpenAI Blog', date: '2025-04-01', snippet: 'New architecture designed for multi-step reasoning in scientific contexts.' },
-  { title: 'Climate Impact of AI: Industry Report 2025', url: 'https://www.iea.org/reports/ai-energy-2025', source: 'International Energy Agency', date: '2025-01-20', snippet: 'Data centers supporting AI workloads now consume 4% of global electricity.' },
-  { title: 'Neuralink Achieves Milestone in Brain-Computer Interface Trials', url: 'https://www.reuters.com/technology/neuralink-bci-milestone-2025', source: 'Reuters', date: '2025-03-22', snippet: 'Participants can now control complex digital interfaces using thought alone.' },
-];
 
 // ─── Search Helpers ──────────────────────────────────────────────────────────
 
@@ -124,26 +94,6 @@ function parseSemanticScholarResponse(json: string): Paper[] {
   } catch {
     return [];
   }
-}
-
-function searchMockPapers(query: string): Paper[] {
-  const keywords = query.toLowerCase().split(/\s+/);
-  const scored = MOCK_PAPERS.map(paper => {
-    const text = `${paper.title} ${paper.abstract} ${paper.authors}`.toLowerCase();
-    const score = keywords.filter(k => k.length > 2 && text.includes(k)).length;
-    return { ...paper, score };
-  }).sort((a, b) => b.score - a.score);
-  return scored.slice(0, 5).map(({ score, ...p }) => p);
-}
-
-function searchMockArticles(query: string): Article[] {
-  const keywords = query.toLowerCase().split(/\s+/);
-  const scored = MOCK_ARTICLES.map(article => {
-    const text = `${article.title} ${article.snippet} ${article.source}`.toLowerCase();
-    const score = keywords.filter(k => k.length > 2 && text.includes(k)).length;
-    return { ...article, score };
-  }).sort((a, b) => b.score - a.score);
-  return scored.slice(0, 5).map(({ score, ...a }) => a);
 }
 
 // ─── Web Search ──────────────────────────────────────────────────────────────
@@ -473,10 +423,13 @@ const searchLiterature = tool({
       }
     }
 
-    // 3) Fallback to mock
+    // 3) Report no results — do not fabricate fake papers
     if (papers.length === 0) {
-      logger.log('No real results, using mock papers');
-      papers = searchMockPapers(query);
+      logger.log('No real academic results found for query');
+      return JSON.stringify({
+        papers: [],
+        _note: "No academic papers found for this query. Do NOT invent or fabricate citations. Report that no verified academic sources were found and synthesize based on web results only.",
+      });
     }
 
     return JSON.stringify({
@@ -529,10 +482,13 @@ const searchWeb = tool({
       articles = await searchWithBrowser(context, query);
     }
 
-    // Strategy 3: Fallback to mock
+    // Strategy 3: Report no results — do not fabricate fake articles
     if (articles.length === 0) {
-      logger.log('All search strategies failed, using mock articles');
-      articles = searchMockArticles(query);
+      logger.log('All web search strategies failed, no results to return');
+      return JSON.stringify({
+        articles: [],
+        _note: "No web articles found. Do NOT invent or fabricate URLs or sources. Report that no verified web sources were found for this query.",
+      });
     }
 
     return JSON.stringify({
@@ -569,12 +525,14 @@ interface ResearchOptions {
   isFollowUp?: boolean;
   confirmedSubQuestions?: string[];
   decomposeOnly?: boolean;
+  locale?: string;
 }
 
 function buildSystemPrompt(opts: ResearchOptions): string {
-  const { depth, urls, previousReport, isFollowUp, confirmedSubQuestions } = opts;
+  const { depth, urls, previousReport, isFollowUp, confirmedSubQuestions, locale } = opts;
   const countMap: Record<string, string> = { quick: '2-3', standard: '3-5', deep: '5-7' };
   const count = countMap[depth] || '3-5';
+  const isEnglish = locale === 'en';
 
   const hasUrls = urls && urls.length > 0;
   const hasConfirmedQuestions = confirmedSubQuestions && confirmedSubQuestions.length > 0;
@@ -603,8 +561,11 @@ function buildSystemPrompt(opts: ResearchOptions): string {
     }
   }
 
-  const lengthMap: Record<string, string> = { quick: '2000-3000字', standard: '4000-6000字', deep: '6000-10000字' };
-  const targetLength = lengthMap[depth] || '4000-6000字';
+  const lengthMap: Record<string, string> = isEnglish
+    ? { quick: '2000-3000 words', standard: '4000-6000 words', deep: '6000-10000 words' }
+    : { quick: '2000-3000字', standard: '4000-6000字', deep: '6000-10000字' };
+  const targetLength = lengthMap[depth] || (isEnglish ? '4000-6000 words' : '4000-6000字');
+  const langDirective = isEnglish ? 'Write the entire report in English.' : '以中文写作整篇报告。';
 
   let prompt = `You are a deep research assistant. Use the provided tools to conduct research, then write a comprehensive report.
 
@@ -624,20 +585,20 @@ ${hasConfirmedQuestions ? `\n## Pre-confirmed Sub-questions:\n${confirmedSubQues
 - Use GFM tables (| header | header |) when presenting comparative data
 - Inline citations like [1], [2] referencing sources
 - Academic but accessible tone
-- Write in the same language as the original research question
-- Section headings: use clean names like "## 结论" or "## 参考文献" — do NOT use slash-combined names like "结论/总结" or "参考文献/References"
+- **Language: ${langDirective}**
+- Section headings: use clean names like "## Conclusion" or "## References" (English) / "## 结论" or "## 参考文献" (Chinese) — do NOT mix languages or use slash-combined names
 
 ## MANDATORY Report Structure (follow exactly in this order):
-1. **## 序言** (or ## Introduction for English) — background, context, research objectives
-2. **## 一、[Topic Chapter]** … **## N、[Topic Chapter]** — the main body chapters (AI decides titles and count based on depth)
-3. **## 结论** (or ## Conclusion for English) — summary of key findings, takeaways
-4. **## 参考文献** (or ## References for English) — ALL citations, numbered [1]–[N]. This is the ONLY references section in the entire report. NO supplementary references elsewhere.
-5. **## 附录** (or ## Appendix for English) — OPTIONAL. Include only if there are data tables or charts to present. The appendix must NOT contain any reference list or citation section.
+1. **## ${isEnglish ? 'Introduction' : '序言'}** — background, context, research objectives
+2. **## ${isEnglish ? 'I. [Topic Chapter]' : '一、[Topic Chapter]'}** … **## N. [Topic Chapter]** — the main body chapters (AI decides titles and count based on depth)
+3. **## ${isEnglish ? 'Conclusion' : '结论'}** — summary of key findings, takeaways
+4. **## ${isEnglish ? 'References' : '参考文献'}** — ALL citations, numbered [1]–[N]. This is the ONLY references section in the entire report. NO supplementary references elsewhere.
+5. **## ${isEnglish ? 'Appendix' : '附录'}** — OPTIONAL. Include only if there are data tables or charts to present. The appendix must NOT contain any reference list or citation section.
 
 ## CRITICAL Structure Rules:
-- The report MUST end with ## 参考文献 (or ## References). Nothing comes after it except optionally ## 附录.
+- The report MUST end with ## ${isEnglish ? 'References' : '参考文献'}. Nothing comes after it except optionally ## ${isEnglish ? 'Appendix' : '附录'}.
 - There must be EXACTLY ONE references section. NEVER create "参考文献（补充）", "补充参考文献", "Additional References", or any secondary citation list.
-- ALL inline citations [1]–[N] must resolve to entries in the single ## 参考文献 section.
+- ALL inline citations [1]–[N] must resolve to entries in the single ## ${isEnglish ? 'References' : '参考文献'} section.
 - If an appendix is included, it may only contain tables, charts, or supplementary data — no citation lists.
 - References section: list cited sources concisely (author, title, year only — NO full URLs)
 - CRITICAL: You MUST write the COMPLETE report. Do NOT stop mid-sentence or mid-section. Write all sections through ## 参考文献 before stopping.`;
@@ -675,7 +636,8 @@ async function* streamFollowUpEdit(
   context: any,
   signal?: AbortSignal
 ): AsyncGenerator<string> {
-  const { depth, projectId } = opts;
+  const { depth, projectId, locale } = opts;
+  const isEnglish = locale === 'en';
   const conversationId = context.conversation_id || "default";
   const session = context.store?.openaiSession?.(conversationId);
 
@@ -694,18 +656,19 @@ Edit the provided research report according to the user's modification request.
 - PRESERVE all existing content that is not explicitly requested to change
 - Only MODIFY / ADD / REMOVE exactly what the user requests
 - Output the COMPLETE updated report — all original content with your modifications seamlessly integrated
-- Maintain the same writing style, citation format, citation numbering, and language as the original report
+- Maintain the same writing style, citation format, and citation numbering as the original report
+- **Language: ${isEnglish ? 'Write the entire report in English.' : '以中文写作整篇报告。'}**
 - Do NOT prefix with any meta-commentary like "以下是更新后的报告" or "Here is the updated report" — start directly from the first heading
 - Do NOT explain what you changed — just output the finished report
-- If user asks to add a chapter: insert it in the logically appropriate position within the existing structure, BEFORE ## 结论
+- If user asks to add a chapter: insert it in the logically appropriate position within the existing structure, BEFORE ## ${isEnglish ? 'Conclusion' : '结论'}
 - If user asks to update a section: rewrite only that section, keep everything else verbatim
 - If user asks to remove content: remove it and ensure surrounding text still flows naturally
 
 ## MANDATORY Structure Rules (preserve in all edits):
-- The report must follow: ## 序言 → numbered body chapters → ## 结论 → ## 参考文献 → ## 附录 (optional)
-- There must be EXACTLY ONE ## 参考文献 (or ## References) section — never create "参考文献（补充）" or any secondary citation list
-- All citations [1]–[N] must resolve to entries in the single ## 参考文献 section
-- The ## 附录 section must NOT contain any reference list`,
+- The report must follow: ## ${isEnglish ? 'Introduction' : '序言'} → numbered body chapters → ## ${isEnglish ? 'Conclusion' : '结论'} → ## ${isEnglish ? 'References' : '参考文献'} → ## ${isEnglish ? 'Appendix' : '附录'} (optional)
+- There must be EXACTLY ONE ## ${isEnglish ? 'References' : '参考文献'} section — never create "参考文献（补充）" or any secondary citation list
+- All citations [1]–[N] must resolve to entries in the single ## ${isEnglish ? 'References' : '参考文献'} section
+- The ## ${isEnglish ? 'Appendix' : '附录'} section must NOT contain any reference list`,
     model: getModel(),
     tools: [],
     modelSettings: { maxTokens: 65536 },
@@ -727,7 +690,7 @@ Edit the provided research report according to the user's modification request.
       maxTurns: 3,
       modelSettings: { maxTokens: 65536 },
       ...(session ? { session } : {}),
-    });
+    } as any) as any;
 
     for await (const event of result) {
       if (signal?.aborted) break;
@@ -772,25 +735,25 @@ Edit the provided research report according to the user's modification request.
       yield sseEvent({ type: 'token_usage', input: totalInputTokens, output: totalOutputTokens });
     }
 
-    // Save versioned copy to project
-    if (projectId) {
+    // Save the edited version to project store (backend primary save)
+    if (projectId && context.agents?.invoke) {
       try {
-        const versionData = {
-          question: modificationRequest,
-          depth,
-          subQuestions: [],
-          papers: [],
-          articles: [],
-          scrapedUrls: [],
-          report,
-          trigger: 'follow-up',
-        };
-        if (context.agents?.invoke) {
-          await context.agents.invoke('/project', { action: 'save_version', id: projectId, versionData });
-          logger.log(`Saved follow-up edit version to project ${projectId}`);
-        }
-      } catch (e) {
-        logger.log('Project version save failed (follow-up):', (e as Error).message);
+        await context.agents.invoke('/project', {
+          action: 'save_version',
+          id: projectId,
+          versionData: {
+            question: modificationRequest,
+            depth,
+            papers: [],
+            articles: [],
+            scrapedUrls: [],
+            report,
+            trigger: 'follow-up',
+          },
+        });
+        logger.log(`Follow-up version saved for project ${projectId}`);
+      } catch (e: any) {
+        logger.error('Failed to save follow-up version:', e.message);
       }
     }
   }
@@ -844,7 +807,7 @@ Call the decompose_question tool with your generated sub-questions.`,
       const result = await run(decomposeAgent, [{ role: "user", content: question }] as any, {
         stream: true, signal, maxTurns: 10, modelSettings: { maxTokens: 4096 },
         ...(session ? { session } : {}),
-      });
+      } as any) as any;
 
       let subQs: string[] = [];
       for await (const event of result) {
@@ -923,10 +886,14 @@ Call the decompose_question tool with your generated sub-questions.`,
 
   try {
     // maxTurns: 15 allows tool calls + long report generation
-    const result = await run(agent, input as any, { stream: true, signal, maxTurns: 15, modelSettings: { maxTokens: 65536 }, ...(session ? { session } : {}) });
+    const result = await run(agent, input as any, { stream: true, signal, maxTurns: 15, modelSettings: { maxTokens: 65536 }, ...(session ? { session } : {}) } as any) as any;
 
     let synthesizing = false;
     let allToolsDone = false;   // Track if all tool outputs received
+    // Preamble buffer: hold initial synthesizer chunks until the first markdown
+    // heading appears, then strip known AI preamble phrases before emitting.
+    let streamBuffer = '';
+    let streamBufferFlushed = false;
 
     for await (const event of result) {
       if (signal?.aborted) break;
@@ -1008,7 +975,28 @@ Call the decompose_question tool with your generated sub-questions.`,
                 yield sseEvent({ type: 'progress', step: 4, total: 4, label: 'Writing research report...' });
               }
               report += text;
-              yield sseEvent({ type: 'ai_response', content: text, agent: 'synthesizer' });
+              // Preamble buffering: hold chunks until the first markdown heading,
+              // then strip known AI intro phrases before sending to the frontend.
+              if (!streamBufferFlushed) {
+                streamBuffer += text;
+                const hasHeading = /(?:^|\n)#/.test(streamBuffer);
+                if (hasHeading || streamBuffer.length >= 600) {
+                  streamBufferFlushed = true;
+                  let cleaned = streamBuffer
+                    .replace(/^以下是[^\n]*\n?/gm, '')
+                    .replace(/^下面是[^\n]*\n?/gm, '')
+                    .replace(/^Here(?:'s| is)(?: the| a)? (?:comprehensive |detailed |in-depth )?(?:research|report|summary|analysis|findings)[^\n]*\n?/gim, '')
+                    .replace(/^Based on (?:the |my )?(?:search results?|research)[^\n]*/gim, '')
+                    .replace(/^The following (?:is |are )?(?:a |the )?(?:comprehensive |detailed )?(?:research|report|summary|analysis)[^\n]*\n?/gim, '');
+                  cleaned = cleaned.replace(/^\n+/, '');
+                  if (cleaned) {
+                    yield sseEvent({ type: 'ai_response', content: cleaned, agent: 'synthesizer' });
+                  }
+                }
+                // else: still buffering — don't emit yet
+              } else {
+                yield sseEvent({ type: 'ai_response', content: text, agent: 'synthesizer' });
+              }
             }
           }
         }
@@ -1114,7 +1102,7 @@ Call the decompose_question tool with your generated sub-questions.`,
 
       const continueResult = await run(continueAgent, continueInput as any, {
         stream: true, signal, maxTurns: 3, modelSettings: { maxTokens: 65536 },
-      });
+      } as any) as any;
 
       let continuation = '';
       for await (const event of continueResult) {
@@ -1155,7 +1143,53 @@ Call the decompose_question tool with your generated sub-questions.`,
   if (report && report.length > 500) {
     const originalLen = report.length;
 
-    // 0. Strip any supplementary reference sections inside appendix
+    // 0a. Strip leaked internal reasoning / chain-of-thought text that sometimes
+    //     appears at the very beginning of the report before the actual content.
+    //     These are lines that clearly belong to the model's internal process,
+    //     not to the final research report.
+    //
+    //     Patterns caught:
+    //     - "第N步：..." / "Step N: ..."
+    //     - Lines starting with "现在" + action ("现在所有数据已收集完毕。", "现在让我", ...)
+    //     - "让我撰写" / "Let me write" / "I will now write"
+    //     - "好的，" / "好的。" (affirmative self-talk)
+    //     - "我需要" / "我将" / "我现在" lines
+    //     - "首先，" / "接下来，" planning preambles
+    {
+      // Remove whole leading sections of reasoning before the first ## heading.
+      // Strategy: split by first real ## heading, strip reasoning from the preamble.
+      const firstHeadingIdx = report.indexOf('\n#');
+      const preamble = firstHeadingIdx > 0 ? report.slice(0, firstHeadingIdx) : '';
+      const rest = firstHeadingIdx > 0 ? report.slice(firstHeadingIdx) : report;
+
+      if (preamble) {
+        // Strip individual reasoning lines from the preamble
+        const reasoningLinePattern = /^(?:(?:第[一二三四五六七八九十\d]+步[：:：]|Step\s*\d+\s*[:：])[^\n]*\n?|现在(?:所有数据已收集完毕|让我|我将|开始)[^\n]*\n?|让我(?:撰写|开始|整合|综合|写一|生成)[^\n]*\n?|好的[，。,][^\n]*\n?|我(?:需要|将|现在|已经)[^\n]*\n?|(?:首先|接下来|然后|最后)[，,][^\n]*\n?|I(?:'ll| will| am going to| need to| have)[^\n]*\n?|(?:Now|Let me|OK,|Alright,)[^\n]*\n?)/gim;
+        const cleanedPreamble = preamble.replace(reasoningLinePattern, '').trim();
+        report = cleanedPreamble ? cleanedPreamble + rest : rest.trimStart();
+      }
+
+      // Also strip reasoning lines that appear anywhere in the report when they are
+      // sandwiched between content (e.g. mid-stream leak of a "第三步：" line)
+      report = report
+        .replace(/^第[一二三四五六七八九十\d]+步[：:：][^\n]*\n/gm, '')
+        .replace(/^Step\s*\d+\s*[:：][^\n]*\n/gim, '')
+        .replace(/^现在(?:所有数据已收集完毕|让我|我将|开始)[^\n]*\n/gm, '')
+        .replace(/^让我(?:撰写|开始|整合|综合|写一|生成)[^\n]*\n/gm, '')
+        .replace(/^好的[，。,][^\n]*\n/gm, '')
+        .replace(/^我(?:需要|将|现在|已经)(?:进行|开始|撰写|综合|生成|整理)[^\n]*\n/gm, '')
+        .replace(/^以下是[^\n]*\n?/gm, '')
+        .replace(/^下面是[^\n]*\n?/gm, '')
+        .replace(/^Here(?:'s| is)(?: the| a)? (?:comprehensive |detailed |in-depth )?(?:research|report|summary|analysis|findings)[^\n]*\n?/gim, '')
+        .replace(/^Based on (?:the |my )?(?:search results?|research)[^\n]*\n?/gim, '')
+        .replace(/^The following (?:is |are )?(?:a |the )?(?:comprehensive |detailed )?(?:research|report|summary|analysis)[^\n]*\n?/gim, '');
+
+      if (report.length !== originalLen) {
+        logger.log(`Structure check: stripped ${originalLen - report.length} chars of leaked reasoning text`);
+      }
+    }
+
+    // 0b. Strip any supplementary reference sections inside appendix
     //    e.g. "参考文献（补充）", "补充参考文献", "Additional References", "参考文献\n" that appear AFTER the first references section
     report = report
       .replace(/\n###?\s*(参考文献（补充）|补充参考文献|Additional References?|参考文献补充)[^\n]*\n[\s\S]*?(?=\n##|\s*$)/gi, '')
@@ -1243,31 +1277,39 @@ Call the decompose_question tool with your generated sub-questions.`,
 
   // Save to project (versioned) or standalone blob
   if (projectId && report) {
-    try {
-      // Call project endpoint to save version
-      const versionData = {
-        question, depth, subQuestions, papers, articles, scrapedUrls, report,
-        trigger: isFollowUp ? 'follow-up' : 'initial',
-      };
-      if (context.agents?.invoke) {
-        await context.agents.invoke('/project', { action: 'save_version', id: projectId, versionData });
-        logger.log(`Saved version to project ${projectId}`);
+    // Primary save: use agent-to-agent invoke (backend path, available on EdgeOne Pages)
+    if (context.agents?.invoke) {
+      try {
+        await context.agents.invoke('/project', {
+          action: 'save_version',
+          id: projectId,
+          versionData: { question, depth, papers, articles, scrapedUrls, report, trigger: 'initial' },
+        });
+        logger.log(`Version saved for project ${projectId}`);
+      } catch (e: any) {
+        logger.error('Failed to save version:', e.message);
       }
-    } catch (e) {
-      logger.log('Project version save failed:', (e as Error).message);
     }
+    // else: frontend (page.tsx finally block) will save as fallback when context.agents is unavailable
   } else {
     try {
-      const reportStore = getReportStore();
-      if (reportStore && report) {
-        await reportStore.setJSON(`report-${conversationId}-${Date.now()}`, {
-          question, depth, subQuestions, papers, articles, scrapedUrls, report,
-          createdAt: new Date().toISOString(), conversationId,
+      const store = _currentContext?.store;
+      if (store && report) {
+        const key = `standalone-report-${conversationId}`;
+        try { await store.clearMessages({ conversationId: key }); } catch {}
+        await store.appendMessage({
+          conversationId: key,
+          role: 'system',
+          content: JSON.stringify({
+            question, depth, subQuestions, papers, articles, scrapedUrls, report,
+            createdAt: new Date().toISOString(), conversationId,
+          }),
+          metadata: { type: 'standalone-report' },
         });
-        logger.log('Report archived to Blob');
+        logger.log('Report archived to store');
       }
     } catch (e) {
-      logger.log('Blob archive skipped:', (e as Error).message);
+      logger.log('Store archive skipped:', (e as Error).message);
     }
   }
 
@@ -1288,7 +1330,7 @@ Call the decompose_question tool with your generated sub-questions.`,
 export async function onRequest(context: any) {
   const { request } = context;
   const body = request?.body ?? {};
-  const { message, question: questionField, depth = 'standard', projectId, urls, confirmedSubQuestions, decomposeOnly } = body;
+  const { message, question: questionField, depth = 'standard', projectId, urls, confirmedSubQuestions, decomposeOnly, locale } = body;
   const question = message || questionField || '';
 
   if (!question) {
@@ -1329,6 +1371,7 @@ export async function onRequest(context: any) {
     isFollowUp,
     confirmedSubQuestions: Array.isArray(confirmedSubQuestions) ? confirmedSubQuestions : undefined,
     decomposeOnly: !!decomposeOnly,
+    locale,
   };
   const generator = streamResearch(question, opts, context, signal);
   return createSSEResponse(generator, signal);
