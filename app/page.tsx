@@ -10,9 +10,11 @@ import { FollowUpChat } from './components/follow-up-chat';
 import { VersionSelector } from './components/version-selector';
 import { DiffView } from './components/diff-view';
 import { SubQuestionConfirm } from './components/sub-question-confirm';
+import { CitationCoverage } from './components/citation-coverage';
 import { LanguageToggle } from '@/components/ui/language-toggle';
 import { TokenUsage } from '@/components/ui/token-usage';
 import { useI18n } from '@/lib/i18n';
+import { normalizeAuthors } from '@/lib/citations';
 
 export interface SubagentEvent {
   id: string;
@@ -69,6 +71,18 @@ export default function Home() {
 
   // Project state
   const [projects, setProjects] = useState<Project[]>([]);
+  // Tracks the very first load — distinct from a refetch — so the sidebar
+  // can render skeleton rows on slow networks instead of a misleading
+  // "no projects yet" empty state.
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  // Tracks the per-version load (the "get_version" request that pulls the
+  // saved report body + sources). Distinct from `versionsLoading`, which
+  // covers the project-level "list of versions" fetch. Used to overlay a
+  // skeleton on the main content area while we swap projects so the user
+  // gets immediate feedback on switch.
+  const [loadingVersion, setLoadingVersion] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [currentVersion, setCurrentVersion] = useState<number | null>(null);
@@ -83,9 +97,13 @@ export default function Home() {
   const [pendingSubQuestions, setPendingSubQuestions] = useState<string[] | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState('');
   const [pendingDepth, setPendingDepth] = useState('standard');
+  // Citation style chosen at the start of a research run, reused for follow-ups
+  // and regenerations within the same session.
+  const [citationStyle, setCitationStyle] = useState<string>('apa');
 
   // Diff state
   const [diffData, setDiffData] = useState<DiffData | null>(null);
+  const [isDiffLoading, setIsDiffLoading] = useState(false);
 
   // Tick counter to signal FollowUpChat when research/regeneration completes
   const [researchCompleteTick, setResearchCompleteTick] = useState(0);
@@ -93,9 +111,17 @@ export default function Home() {
   // Load projects on mount
   useEffect(() => { loadProjects(); }, []);
 
-  // Auto-load latest version when project selected
+  // Auto-load latest version when project selected. Switch is synchronous
+  // from the user's perspective: blank out the previous report immediately
+  // and flip `loadingVersion` so the main panel shows a skeleton, then let
+  // loadProjectVersions → loadVersion fill the new content in.
   useEffect(() => {
     if (selectedProjectId) {
+      setReport('');
+      setSources([]);
+      setSubagents([]);
+      setCurrentVersion(null);
+      setLoadingVersion(true);
       loadProjectVersions(selectedProjectId);
     } else {
       setVersions([]);
@@ -103,6 +129,7 @@ export default function Home() {
       setReport('');
       setSources([]);
       setSubagents([]);
+      setLoadingVersion(false);
     }
   }, [selectedProjectId]);
 
@@ -120,10 +147,13 @@ export default function Home() {
       } else if (res.status === 503) {
         setBlobWarning('Blob 存储未配置，项目和聊天记录无法保存。请在 .env 中配置 PROJECT_ID 和 EDGEONE_PAGES_API_TOKEN，或部署到 EdgeOne Makers 平台。');
       }
-    } catch {}
+    } catch {} finally {
+      setProjectsLoading(false);
+    }
   };
 
   const loadProjectVersions = async (projectId: string): Promise<number> => {
+    setVersionsLoading(true);
     try {
       const res = await fetch('/project', {
         method: 'POST',
@@ -133,17 +163,25 @@ export default function Home() {
       if (res.ok) {
         const { versions: v } = await res.json();
         setVersions(v || []);
-        // Auto-load latest version
+        // Auto-load latest version. If the project has no versions yet
+        // (newly-created project), there's nothing to load — but we still
+        // need to clear the loadingVersion flag the project-switch effect
+        // set, otherwise the main panel stays in its skeleton state forever.
         if (v && v.length > 0) {
           loadVersion(projectId, v[v.length - 1].version);
+        } else {
+          setLoadingVersion(false);
         }
         return (v || []).length;
       }
-    } catch {}
+    } catch {} finally {
+      setVersionsLoading(false);
+    }
     return 0;
   };
 
   const loadVersion = async (projectId: string, version: number) => {
+    setLoadingVersion(true);
     try {
       const res = await fetch('/project', {
         method: 'POST',
@@ -156,23 +194,65 @@ export default function Home() {
           setReport(data.report || '');
           setCurrentVersion(version);
           const allSources: Source[] = [];
+          // Re-number citation markers from 1 across (papers, articles) in
+          // exactly the order the backend tools produced them. Some legacy
+          // saved versions wrote `citationNumber` per-array (papers 1..P AND
+          // articles 1..N, instead of the registry's papers 1..P, articles
+          // P+1..N), which collided into duplicate React keys + duplicate
+          // SourceCard ids the moment the project was loaded. We can't trust
+          // a stored citationNumber for backward compat — but the array
+          // ordering is canonical, so we just ignore the stored field and
+          // re-number sequentially. This matches the SSE-streaming path
+          // (page.tsx streamResearch counter) and produces the same numbering
+          // the model used when it wrote the report.
           let counter = 0;
-          for (const p of data.papers || []) { counter++; allSources.push({ type: 'academic', citationNumber: counter, ...p }); }
-          for (const a of data.articles || []) { counter++; allSources.push({ type: 'web', citationNumber: counter, ...a }); }
+          for (const p of data.papers || []) {
+            counter++;
+            allSources.push({ type: 'academic', ...p, citationNumber: counter, authors: normalizeAuthors(p.authors) });
+          }
+          for (const a of data.articles || []) {
+            counter++;
+            allSources.push({ type: 'web', ...a, citationNumber: counter, authors: normalizeAuthors(a.authors) });
+          }
           setSources(allSources);
+          // Hydrate the progress tree from saved version data. Pass the
+          // sub-questions / papers / articles JSON-encoded into each stage's
+          // content so ProgressTree (orchestration pipeline) can render its
+          // input→output data summaries (matches the live SSE shape).
+          const savedSubQuestions = Array.isArray(data.subQuestions) ? data.subQuestions : [];
+          const savedPapers = Array.isArray(data.papers) ? data.papers : [];
+          const savedArticles = Array.isArray(data.articles) ? data.articles : [];
           setSubagents([
-            { id: 'stage-1', agent: 'question-decomposer', status: 'complete' },
-            { id: 'stage-2', agent: 'literature-searcher', status: 'complete' },
-            { id: 'stage-3', agent: 'web-researcher', status: 'complete' },
+            {
+              id: 'stage-1',
+              agent: 'question-decomposer',
+              status: 'complete',
+              ...(savedSubQuestions.length > 0 ? { content: JSON.stringify(savedSubQuestions) } : {}),
+            },
+            {
+              id: 'stage-2',
+              agent: 'literature-searcher',
+              status: 'complete',
+              ...(savedPapers.length > 0 ? { content: JSON.stringify(savedPapers) } : {}),
+            },
+            {
+              id: 'stage-3',
+              agent: 'web-researcher',
+              status: 'complete',
+              ...(savedArticles.length > 0 ? { content: JSON.stringify(savedArticles) } : {}),
+            },
             { id: 'stage-4', agent: 'synthesizer', status: 'complete' },
           ]);
         }
       }
-    } catch {}
+    } catch {} finally {
+      setLoadingVersion(false);
+    }
   };
 
   // Shared helper: creates a project, updates state, and returns the new project id
   const createProject = async (name: string): Promise<string | null> => {
+    setCreatingProject(true);
     try {
       const res = await fetch('/project', {
         method: 'POST',
@@ -196,7 +276,9 @@ export default function Home() {
         setSelectedProjectId(project.id);
         return project.id;
       }
-    } catch {}
+    } catch {} finally {
+      setCreatingProject(false);
+    }
     return null;
   };
 
@@ -220,6 +302,7 @@ export default function Home() {
 
   const handleDiff = async (v1: number, v2: number) => {
     if (!selectedProjectId) return;
+    setIsDiffLoading(true);
     try {
       const res = await fetch('/project', {
         method: 'POST',
@@ -230,7 +313,9 @@ export default function Home() {
         const data = await res.json();
         setDiffData(data);
       }
-    } catch {}
+    } catch {} finally {
+      setIsDiffLoading(false);
+    }
   };
 
   const handleStop = useCallback(() => {
@@ -248,7 +333,7 @@ export default function Home() {
   }, [conversationId]);
 
   // Main research handler — Phase 1: decompose only, wait for user confirmation
-  const handleResearch = useCallback(async (question: string, depth: string) => {
+  const handleResearch = useCallback(async (question: string, depth: string, style: string) => {
     setIsResearching(true);
     setSubagents([]);
     setSources([]);
@@ -258,6 +343,7 @@ export default function Home() {
     setPendingSubQuestions(null);
     setPendingQuestion(question);
     setPendingDepth(depth);
+    setCitationStyle(style);
 
     // Auto-create a project named after the research question when none is selected
     let effectiveProjectId = selectedProjectId;
@@ -267,7 +353,7 @@ export default function Home() {
     }
 
     // Phase 1: decompose only
-    await streamResearch({ message: question, depth, projectId: effectiveProjectId || undefined, decomposeOnly: true, locale });
+    await streamResearch({ message: question, depth, projectId: effectiveProjectId || undefined, decomposeOnly: true, locale, citationStyle: style });
   }, [selectedProjectId]);
 
   // Phase 2: user confirmed sub-questions, proceed with full research
@@ -285,14 +371,16 @@ export default function Home() {
       projectId: selectedProjectId || undefined,
       confirmedSubQuestions: confirmedQuestions,
       locale,
+      citationStyle,
     });
-  }, [selectedProjectId, pendingQuestion, pendingDepth]);
+  }, [selectedProjectId, pendingQuestion, pendingDepth, citationStyle]);
 
   // Regenerate report (triggered from chat after user confirms)
   const handleRegenerate = useCallback(async (chatSummary: string) => {
     setIsResearching(true);
-    setSubagents([]);
-    // Keep old report and sources visible until new content starts streaming
+    // Don't clear subagents/sources/report here. The backend follow-up path
+    // replays the 4-stage lifecycle (with previous papers/articles attached)
+    // before the editor stream starts, so the left panel updates in place.
     setError(null);
     setTokenUsage({ input: 0, output: 0 });
 
@@ -301,10 +389,11 @@ export default function Home() {
       depth: 'standard',
       projectId: selectedProjectId || undefined,
       locale,
+      citationStyle,
     });
     // Signal FollowUpChat that regeneration is complete (only fires for regeneration, not initial research)
     setResearchCompleteTick(c => c + 1);
-  }, [selectedProjectId]);
+  }, [selectedProjectId, citationStyle]);
 
   // Add a source to the left panel (triggered from chat suggest_add_source)
   const handleAddSource = useCallback((source: { title: string; url?: string; year?: number; authors?: string }) => {
@@ -321,6 +410,45 @@ export default function Home() {
       return [...prev, newSource];
     });
   }, []);
+
+  // Append a fully-formed Source (used by SourcesPanel's manual-add /
+  // DOI-enrich UI). The number is reassigned to be unique.
+  const handleAppendSource = useCallback((source: Source) => {
+    setSources(prev => {
+      const nextCitationNumber = prev.length > 0 ? Math.max(...prev.map(s => s.citationNumber)) + 1 : 1;
+      return [...prev, { ...source, citationNumber: nextCitationNumber }];
+    });
+  }, []);
+
+  // Update an existing source by citationNumber (in-place edit from SourcesPanel)
+  const handleUpdateSource = useCallback((updated: Source) => {
+    setSources(prev => prev.map(s => s.citationNumber === updated.citationNumber ? updated : s));
+  }, []);
+
+  // Remove a source. Citation numbers of the remaining sources are NOT
+  // renumbered — the existing report body already references them and
+  // renumbering would break those links. The CitationCoverage panel will
+  // surface any orphaned `[N]` left in the body.
+  const handleDeleteSource = useCallback((citationNumber: number) => {
+    setSources(prev => prev.filter(s => s.citationNumber !== citationNumber));
+  }, []);
+
+  // Triggered from a SourceCard's "Re-read & rewrite" action. Sends a
+  // follow-up edit instruction tailored to that single source. The prompt
+  // tells the model to integrate this source into a relevant section,
+  // not to rewrite the whole report.
+  const handleRewriteFromSource = useCallback((source: Source, instruction: string) => {
+    // Authors might still be the wire-form string for very old saved versions;
+    // normalize before reading [0].
+    const authors = normalizeAuthors(source.authors);
+    const sourceLabel = authors?.[0] && source.year
+      ? `[${source.citationNumber}] ${authors[0]} et al. (${source.year}) — ${source.title}`
+      : `[${source.citationNumber}] ${source.title}`;
+    const fullInstruction = instruction
+      ? `${instruction}\n\nFocus source: ${sourceLabel}${source.doi ? ` (DOI: ${source.doi})` : ''}${source.url ? ` (${source.url})` : ''}`
+      : `Carefully re-read source ${sourceLabel} and integrate its key findings into the most relevant section of the report. Add inline citations to ${source.citationNumber} where appropriate. Preserve everything else.`;
+    handleRegenerate(fullInstruction);
+  }, [handleRegenerate]);
 
   // Core streaming logic
   const streamResearch = async (body: Record<string, unknown>) => {
@@ -380,9 +508,20 @@ export default function Home() {
 
               case 'subagent_lifecycle':
                 setSubagents(prev => {
-                  const existing = prev.find(s => s.id === event.id);
-                  if (existing) {
-                    return prev.map(s => s.id === event.id ? { ...s, status: event.status, content: event.content || s.content } : s);
+                  const idx = prev.findIndex(s => s.id === event.id);
+                  if (idx >= 0) {
+                    const existing = prev[idx];
+                    const nextContent = event.content || existing.content;
+                    // Skip the state update entirely when nothing observable
+                    // changed. Returning the same array short-circuits React's
+                    // re-render and prevents fan-out to ProgressTree /
+                    // SourcesPanel / ReportView on no-op SSE pings.
+                    if (existing.status === event.status && existing.content === nextContent) {
+                      return prev;
+                    }
+                    const nextArr = prev.slice();
+                    nextArr[idx] = { ...existing, status: event.status, content: nextContent };
+                    return nextArr;
                   }
                   return [...prev, { id: event.id, agent: event.agent, status: event.status, description: event.description, content: event.content }];
                 });
@@ -395,10 +534,24 @@ export default function Home() {
                         .filter((item: any) => item.title && item.title.trim())
                         .map((item: any) => {
                           citationCounter++;
+                          // Always re-number sequentially across all SSE
+                          // batches. The backend's _tools.ts numbers
+                          // papers 1..P and articles P+1..N (offset by
+                          // registry.papers.length), so a continuously
+                          // running counter produces the SAME numbers the
+                          // model was shown — but it also bullet-proofs
+                          // against legacy/buggy payloads that double-emit
+                          // [1..N] in both batches (which collided into
+                          // duplicate React keys + source-N ids).
+                          // Normalize authors — backend emits a comma-joined
+                          // string for academic sources, but the frontend
+                          // Source type expects string[]. UI code calling
+                          // `.join()` would otherwise blow up.
+                          const normalized = { ...item, authors: normalizeAuthors(item.authors) };
                           if (item.doi || item.journal) {
-                            return { type: 'academic' as const, citationNumber: citationCounter, ...item };
+                            return { type: 'academic' as const, ...normalized, citationNumber: citationCounter };
                           }
-                          return { type: 'web' as const, citationNumber: citationCounter, ...item };
+                          return { type: 'web' as const, ...normalized, citationNumber: citationCounter };
                         });
                       lastSources = [...lastSources, ...newSources];
                       setSources(prev => [...prev, ...newSources]);
@@ -468,13 +621,13 @@ export default function Home() {
       // may still be null in this closure (React state update hasn't re-rendered yet)
       const effectiveProjectId = (body.projectId as string) || selectedProjectId;
       if (effectiveProjectId && lastReport) {
-        // Wait briefly for backend blob write propagation (backend saves via context.agents.invoke)
+        // Wait briefly for backend store write propagation (research.ts saves directly via context.store)
         await new Promise(r => setTimeout(r, 800));
         const prevCount = versions.length;
         const newCount = await loadProjectVersions(effectiveProjectId);
 
         if (newCount <= prevCount) {
-          // Backend save didn't run (local dev / context.agents unavailable) — frontend fallback
+          // Backend save didn't run (local dev / context.store unavailable) — frontend fallback
           try {
             const papers = lastSources.filter(s => s.type === 'academic');
             const articles = lastSources.filter(s => s.type === 'web');
@@ -519,6 +672,8 @@ export default function Home() {
             onSelect={setSelectedProjectId}
             onCreate={handleCreateProject}
             onDelete={handleDeleteProject}
+            loading={projectsLoading}
+            creating={creatingProject}
           />
         </div>
       </aside>
@@ -623,32 +778,115 @@ export default function Home() {
             </div>
           )}
 
-          {/* Version Selector */}
-          {selectedProjectId && versions.length > 0 && (
+          {/* Version Selector — show a slim placeholder while versions
+              are loading so the user gets immediate feedback (especially
+              important on slow networks where the project's /get request
+              can take a few hundred ms). Hide entirely once we know the
+              project has zero versions. */}
+          {selectedProjectId && (versionsLoading || versions.length > 0) && (
             <div className="mt-6">
-              <VersionSelector
-                versions={versions}
-                currentVersion={currentVersion}
-                onSelectVersion={(v) => loadVersion(selectedProjectId, v)}
-                onDiff={handleDiff}
-              />
+              {versionsLoading && versions.length === 0 ? (
+                <div className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/60">
+                  <svg className="w-3.5 h-3.5 animate-spin text-neutral-400" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">{t.versions}…</span>
+                </div>
+              ) : (
+                <VersionSelector
+                  versions={versions}
+                  currentVersion={currentVersion}
+                  onSelectVersion={(v) => loadVersion(selectedProjectId, v)}
+                  onDiff={handleDiff}
+                />
+              )}
             </div>
           )}
 
           {/* Diff View */}
+          {isDiffLoading && !diffData && (
+            <div className="mt-6 p-6 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex items-center justify-center gap-3 text-sm text-neutral-600 dark:text-neutral-400">
+              <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {t.comparingVersions}
+            </div>
+          )}
           {diffData && (
             <DiffView v1={diffData.v1} v2={diffData.v2} onClose={() => setDiffData(null)} />
           )}
 
           {/* Results Area — hide when there's an error and no report */}
-          {(subagents.length > 0 || report) && !error && (
-            <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-1 space-y-6">
-                <ProgressTree subagents={subagents} isActive={isResearching} />
-                <SourcesPanel sources={sources} />
+          {/* Skeleton during project switch — shown while loadingVersion is
+              true and we haven't received any subagents/report yet. Mirrors
+              the real layout (left sidebar + right report) so the swap
+              feels seamless instead of a sudden flash. */}
+          {loadingVersion && subagents.length === 0 && !report && !error && (
+            <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <aside className="lg:col-span-4 space-y-4">
+                <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
+                  <div className="h-4 w-24 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
+                  <div className="space-y-2 mt-3">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <div className="h-3 w-3 rounded-full bg-neutral-200 dark:bg-neutral-800 animate-pulse flex-shrink-0" />
+                        <div className="h-3 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" style={{ width: `${70 - i * 8}%` }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-2">
+                  <div className="h-4 w-20 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="border border-neutral-100 dark:border-neutral-800 rounded-lg p-3 space-y-2">
+                      <div className="h-3 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" style={{ width: '85%' }} />
+                      <div className="h-2.5 rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" style={{ width: '60%' }} />
+                    </div>
+                  ))}
+                </div>
+              </aside>
+              <div className="lg:col-span-8">
+                <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 space-y-3">
+                  <div className="h-6 w-1/2 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
+                  <div className="h-3 w-full rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" />
+                  <div className="h-3 w-11/12 rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" />
+                  <div className="h-3 w-10/12 rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" />
+                  <div className="h-5 w-1/3 mt-4 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
+                  <div className="h-3 w-full rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" />
+                  <div className="h-3 w-9/12 rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" />
+                  <div className="h-3 w-11/12 rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse" />
+                </div>
               </div>
-              <div className="lg:col-span-2">
-                <ReportView content={report} isStreaming={isResearching} />
+            </div>
+          )}
+
+          {(subagents.length > 0 || report) && !error && (
+            <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left side: combined progress / sources / coverage in a sticky
+                  scroll panel so the right report column gets full height.
+                  Width is tighter (4/12) than before to give the report
+                  more breathing room. */}
+              <aside className="lg:col-span-4 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto space-y-4">
+                <ProgressTree subagents={subagents} isActive={isResearching} />
+                <SourcesPanel
+                  sources={sources}
+                  onAddSource={handleAppendSource}
+                  onUpdateSource={handleUpdateSource}
+                  onDeleteSource={handleDeleteSource}
+                  onRewriteFromSource={handleRewriteFromSource}
+                  disabled={isResearching}
+                />
+                {/* Citation coverage — research-template differentiator.
+                    Only render once a non-streaming report is in hand;
+                    coverage during streaming would jitter as text flows in. */}
+                {report && !isResearching && sources.length > 0 && (
+                  <CitationCoverage report={report} sources={sources} />
+                )}
+              </aside>
+              <div className="lg:col-span-8">
+                <ReportView content={report} isStreaming={isResearching} sources={sources} citationStyle={citationStyle} />
               </div>
             </div>
           )}

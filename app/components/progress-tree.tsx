@@ -17,39 +17,124 @@ interface ProgressTreeProps {
   isActive: boolean;
 }
 
+/** Safely parse a JSON array out of a subagent's `content` field. */
+function parseArray(content?: string): any[] {
+  if (!content) return [];
+  try {
+    const parsed = JSON.parse(content);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Orchestration Pipeline view.
+ *
+ * Renders the 4-stage research flow as a directed pipeline: each node shows
+ * its role, live status, and an input → output data summary (sub-question
+ * count, papers, articles, report) so the user can see how data flows from
+ * the question through search into the synthesized report. This reframes the
+ * old flat progress list as an explicit orchestration graph.
+ */
 export function ProgressTree({ subagents, isActive }: ProgressTreeProps) {
   const { t } = useI18n();
 
-  const AGENT_LABELS: Record<string, string> = {
-    'question-decomposer': t.decomposingQuestion,
-    'literature-searcher': t.searchingLiterature,
-    'web-researcher': t.searchingWeb,
-    'synthesizer': t.synthesizingReport,
-  };
-
   if (subagents.length === 0 && !isActive) return null;
 
-  // Calculate progress percentage
-  const totalStages = 4; // decomposer, literature, web, synthesizer
+  const byId = (id: string) => subagents.find(s => s.id === id);
+  const stage1 = byId('stage-1');
+  const stage2 = byId('stage-2');
+  const stage3 = byId('stage-3');
+  const stage4 = byId('stage-4');
+
+  const subQuestions = parseArray(stage1?.content);
+  const papers = parseArray(stage2?.content);
+  const articles = parseArray(stage3?.content);
+
+  // Progress percentage across the 4 stages.
+  const totalStages = 4;
   const completedStages = subagents.filter(s => s.status === 'complete').length;
   const runningStages = subagents.filter(s => s.status === 'running').length;
   const progress = Math.round(((completedStages + runningStages * 0.5) / totalStages) * 100);
+
+  const fmt = (tpl: string, n: number) => tpl.replace('{n}', String(n));
+
+  const nodes = [
+    {
+      id: 'stage-1',
+      agent: 'question-decomposer',
+      label: t.decomposingQuestion,
+      status: stage1?.status ?? 'pending',
+      input: t.nodeInQuestion,
+      output: subQuestions.length > 0 ? fmt(t.nodeOutSubQuestions, subQuestions.length) : t.nodeOutSubQuestions.replace('{n}', '—'),
+      detail: subQuestions.length > 0 ? <SubQuestionList questions={subQuestions} /> : null,
+    },
+    {
+      id: 'stage-2',
+      agent: 'literature-searcher',
+      label: t.searchingLiterature,
+      status: stage2?.status ?? 'pending',
+      input: t.nodeInSubQuestions,
+      output: papers.length > 0 ? fmt(t.nodeOutPapers, papers.length) : t.nodeOutPapers.replace('{n}', '—'),
+      detail: null,
+    },
+    {
+      id: 'stage-3',
+      agent: 'web-researcher',
+      label: t.searchingWeb,
+      status: stage3?.status ?? 'pending',
+      input: t.nodeInSubQuestions,
+      output: articles.length > 0 ? fmt(t.nodeOutArticles, articles.length) : t.nodeOutArticles.replace('{n}', '—'),
+      detail: null,
+    },
+    {
+      id: 'stage-4',
+      agent: 'synthesizer',
+      label: t.synthesizingReport,
+      status: stage4?.status ?? 'pending',
+      input: fmt(t.nodeInSources, papers.length + articles.length),
+      output: t.nodeOutReport,
+      detail: null,
+    },
+  ];
+
+  const statusPill = (status: string) => {
+    if (status === 'complete') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          {t.pipelineDone}
+        </span>
+      );
+    }
+    if (status === 'running') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse-dot" />
+          {t.pipelineRunning}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400">
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 dark:bg-neutral-500" />
+        {t.pipelineWaiting}
+      </span>
+    );
+  };
 
   return (
     <Card>
       <CardHeader>
         <h3 className="font-serif text-sm font-semibold text-neutral-900 dark:text-warm-100 flex items-center gap-2">
           <svg className="w-4 h-4 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          {t.progress}
-          {isActive && (
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse-dot" />
-          )}
+          {t.orchestrationPipeline}
+          {isActive && <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse-dot" />}
           {isActive && subagents.length > 0 && (
-            <span className="ml-auto text-xs font-normal text-neutral-500 dark:text-neutral-400">
-              {progress}%
-            </span>
+            <span className="ml-auto text-xs font-normal text-neutral-500 dark:text-neutral-400">{progress}%</span>
           )}
         </h3>
         {isActive && subagents.length > 0 && (
@@ -62,75 +147,77 @@ export function ProgressTree({ subagents, isActive }: ProgressTreeProps) {
         )}
       </CardHeader>
       <CardContent>
-        <div className="relative space-y-0">
-          {subagents.map((sub, index) => (
-            <div key={sub.id} className="relative pl-8 pb-4 last:pb-0">
-              {/* Connecting line */}
-              {index < subagents.length - 1 && (
-                <div className="absolute left-[15px] top-7 bottom-0 w-px bg-neutral-200 dark:bg-neutral-700" />
-              )}
+        {isActive && subagents.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            {t.initializingPipeline}
+          </div>
+        ) : (
+          <div className="space-y-0">
+            {nodes.map((node, index) => (
+              <div key={node.id}>
+                {/* Pipeline node */}
+                <div
+                  className={`rounded-lg border p-3 transition-colors ${
+                    node.status === 'running'
+                      ? 'border-blue-300 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/10'
+                      : node.status === 'complete'
+                        ? 'border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900'
+                        : 'border-dashed border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${
+                      node.status === 'complete' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+                        : node.status === 'running' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                          : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-400 dark:text-neutral-500'
+                    }`}>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={AGENT_ICONS[node.agent]} />
+                      </svg>
+                    </div>
+                    <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">{node.label}</span>
+                    <span className="ml-auto">{statusPill(node.status)}</span>
+                  </div>
 
-              {/* Status indicator */}
-              <div className="absolute left-2 top-1.5">
-                {sub.status === 'complete' ? (
-                  <div className="w-5 h-5 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                    <svg className="w-3 h-3 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  {/* Input → Output data flow row */}
+                  <div className="mt-2 flex items-center gap-1.5 text-[11px] pl-8">
+                    <span className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400">
+                      <span className="text-neutral-400 dark:text-neutral-500">{t.pipelineInput}:</span> {node.input}
+                    </span>
+                    <svg className="w-3 h-3 text-neutral-400 dark:text-neutral-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                     </svg>
+                    <span className={`px-1.5 py-0.5 rounded ${
+                      node.status === 'pending'
+                        ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-400 dark:text-neutral-500'
+                        : 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300'
+                    }`}>
+                      <span className="opacity-60">{t.pipelineOutput}:</span> {node.output}
+                    </span>
                   </div>
-                ) : sub.status === 'running' ? (
-                  <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-                    <svg className="w-3 h-3 text-blue-600 dark:text-blue-400 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                  </div>
-                ) : (
-                  <div className="w-5 h-5 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center">
-                    <div className="w-2 h-2 rounded-full bg-neutral-400 dark:bg-neutral-500 animate-pulse-dot" />
-                  </div>
-                )}
-              </div>
 
-              {/* Content */}
-              <div>
-                <div className="flex items-center gap-2">
-                  <svg className="w-3.5 h-3.5 text-neutral-500 dark:text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={AGENT_ICONS[sub.agent] || 'M13 10V3L4 14h7v7l9-11h-7z'} />
-                  </svg>
-                  <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
-                    {AGENT_LABELS[sub.agent] || sub.agent}
-                  </span>
+                  {node.detail && <div className="pl-8 mt-1">{node.detail}</div>}
                 </div>
-                {sub.description && (
-                  <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400 line-clamp-2">
-                    {sub.description}
-                  </p>
-                )}
-                {/* Show sub-questions when question-decomposer completes */}
-                {sub.agent === 'question-decomposer' && sub.status === 'complete' && sub.content && (() => {
-                  try {
-                    const questions = JSON.parse(sub.content);
-                    if (Array.isArray(questions) && questions.length > 0) {
-                      return <SubQuestionList questions={questions} />;
-                    }
-                  } catch {}
-                  return null;
-                })()}
-              </div>
-            </div>
-          ))}
 
-          {isActive && subagents.length === 0 && (
-            <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
-              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {t.initializingPipeline}
-            </div>
-          )}
-        </div>
+                {/* Directional connector between nodes */}
+                {index < nodes.length - 1 && (
+                  <div className="flex justify-center py-1">
+                    <svg
+                      className={`w-4 h-4 ${nodes[index].status === 'complete' ? 'text-purple-400 dark:text-purple-500' : 'text-neutral-300 dark:text-neutral-700'}`}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

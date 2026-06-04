@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useI18n } from '@/lib/i18n';
 
 interface Project {
@@ -15,6 +15,10 @@ interface ProjectSelectorProps {
   onSelect: (id: string) => void;
   onCreate: (name: string) => void;
   onDelete: (id: string) => void;
+  /** Initial fetch in flight — show skeleton rows instead of "no projects". */
+  loading?: boolean;
+  /** Create-project request in flight — disable the button + spinner. */
+  creating?: boolean;
 }
 
 export function ProjectSelector({
@@ -23,18 +27,38 @@ export function ProjectSelector({
   onSelect,
   onCreate,
   onDelete,
+  loading = false,
+  creating = false,
 }: ProjectSelectorProps) {
   const { t } = useI18n();
   const [isCreating, setIsCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  const hasFiredCreate = useRef(false);
+
   const handleCreate = () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || creating) return;
+    // Fire the request but DON'T close the create form yet — we want the
+    // user to see the spinner on the "Create" button while the request is
+    // in flight. Mark that we've fired so the effect below knows to close
+    // the form on the matching return (creating: true → false).
+    hasFiredCreate.current = true;
     onCreate(newName.trim());
-    setNewName('');
-    setIsCreating(false);
   };
+
+  // When the parent finishes the create request we initiated, close the
+  // create form. We gate on `hasFiredCreate.current` so the form only
+  // auto-closes on the *return* of a request we started — toggles of the
+  // creating prop from elsewhere (e.g. parent's other create paths) don't
+  // accidentally collapse the form.
+  useEffect(() => {
+    if (!creating && hasFiredCreate.current) {
+      setIsCreating(false);
+      setNewName('');
+      hasFiredCreate.current = false;
+    }
+  }, [creating]);
 
   const handleDelete = (id: string) => {
     onDelete(id);
@@ -45,6 +69,37 @@ export function ProjectSelector({
     const d = new Date(dateStr);
     return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   };
+
+  // ─── Initial-load skeleton ──────────────────────────────────────────────
+  // On a slow network the first /project list request can take a few hundred
+  // ms; without this the user sees the misleading "no projects yet" empty
+  // state followed by a sudden flash of cards. A handful of muted skeleton
+  // rows reads as "we're loading, don't worry".
+  if (loading) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="w-full flex items-center justify-center gap-2 px-3 py-2 mb-3 rounded-lg text-sm text-neutral-300 dark:text-neutral-600 border border-dashed border-neutral-200 dark:border-neutral-800">
+          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span>{t.newProject}</span>
+        </div>
+        <div className="space-y-1">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              className="px-3 py-2.5 rounded-lg border border-transparent"
+              style={{ opacity: 1 - i * 0.15 }}
+            >
+              <div className="h-3.5 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" style={{ width: `${85 - i * 8}%` }} />
+              <div className="h-2.5 rounded bg-neutral-200/60 dark:bg-neutral-800/60 animate-pulse mt-1.5" style={{ width: '40%' }} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (projects.length === 0 && !isCreating) {
     return (
@@ -88,9 +143,15 @@ export function ProjectSelector({
             </button>
             <button
               onClick={handleCreate}
-              disabled={!newName.trim()}
-              className="px-4 py-1.5 rounded-md text-xs font-medium text-white bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm transition-all"
+              disabled={!newName.trim() || creating}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium text-white bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm transition-all"
             >
+              {creating && (
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
               {t.createProject}
             </button>
           </div>

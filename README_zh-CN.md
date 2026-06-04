@@ -1,168 +1,128 @@
-# 深度研究 Agent
+# Deep Research（深度研究助手）
 
-基于 EdgeOne Makers 平台的多智能体深度研究助手。支持人机协作确认子问题、实时网页与学术搜索、自动续写报告生成、项目版本管理。
+**语言：** [English](./README.md) | 简体中文
 
-## 功能特性
+基于 OpenAI Agents SDK 构建、部署在 EdgeOne Makers 上的多 Agent 深度研究助手，支持人机协同子问题确认、学术与网页搜索、迭代式报告生成及项目级版本管理。
 
-- **两阶段研究流程** — AI 分解问题 → 用户确认/编辑子问题 → 开始正式研究
-- **真实网页搜索** — 内置 `web_search` 工具（首选）+ Bing/DuckDuckGo（降级）
-- **真实学术搜索** — CrossRef API + Semantic Scholar，返回结构化论文数据
-- **自动续写** — 模型输出被截断时，自动重试最多 15 次直到报告完整
-- **结构检查** — 生成后自动移除重复章节、修复格式问题
-- **增量编辑** — 继续研究时保留原有报告结构，仅修改用户要求的部分
-- **项目与版本管理** — 创建项目、自动保存版本、版本对比
-- **继续研究对话** — 对话式界面讨论报告、建议修改、添加文献（聊天记录持久化到 Blob）
-- **文献管理** — AI 检测到用户提及新论文时，自动建议添加到左侧论文列表
-- **实时流式输出** — SSE 推送各阶段进度
-- **URL 抓取** — 抓取用户提供的 URL 内容并整合进研究
-- **中英双语** — 支持中文和英文界面
-- **深色模式** — 完整支持
-- **固定侧边栏** — 项目列表固定显示，不随主内容滚动
+**Framework:** None (raw Node.js) · **Category:** Orchestration · **Language:** TypeScript
 
-## 技术栈
+[![Deploy to EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/makers/new?template=deep-research-edgeone&from=within&fromAgent=1&agentLang=typescript)
 
-| 层级 | 技术 |
-|------|------|
-| 前端 | Next.js + React 19 (App Router) |
-| 样式 | Tailwind CSS |
-| Agent 框架 | OpenAI Agents SDK (`@openai/agents`) |
-| 大模型 | `@makers/deepseek-v4-flash`（写死）通过 EdgeOne AI Gateway |
-| 平台 | EdgeOne Makers（云函数、Blob 存储、沙箱、Tools） |
-| 网页搜索 | `context.tools.get('web_search')` 内置工具 |
-| Markdown 渲染 | react-markdown + remark-gfm（表格、删除线） |
+<!-- TODO: confirm -->
+![preview](./assets/preview.png)
 
-## 架构
+## Overview
 
-```
-┌─────────── 前端 (Next.js) ─────────────────────────────────┐
-│ ResearchForm → 深度选择 + 问题输入                          │
-│ SubQuestionConfirm → 可编辑的子问题列表（人机协作）         │
-│ ProgressTree ← 阶段生命周期事件（可折叠）                  │
-│ SourcesPanel ← 学术/网页来源分页展示                       │
-│ ReportView ← 流式 Markdown 渲染（支持表格）               │
-│ FollowUpChat → 讨论、建议修改、添加文献                    │
-│ VersionSelector → 浏览版本、对比差异                       │
-│ ProjectSelector → 固定侧边栏项目列表                       │
-└────────────────────────────────────────────────────────────┘
+本模板自动化生成严谨、带引用的研究报告。它将研究问题分解为子问题供用户确认，检索学术数据库与实时网页，将发现综合为结构化 Markdown 报告，并支持带完整版本历史的跟进编辑。自动续写循环可在模型输出截断时确保报告完整。
 
-┌─────────── 后端（云函数）──────────────────────────────────┐
-│ /research  — 主研究流程（单 Agent + 工具调用）             │
-│   阶段1: decomposeOnly → 返回子问题给用户确认              │
-│   阶段2: confirmedSubQuestions → 搜索 + 综合报告           │
-│   自动续写循环（最多 15 次重试）                           │
-│   生成后结构检查 & 清理                                    │
-│ /chat     — 继续研究对话（轻量 Agent，无工具）             │
-│ /project  — 项目 CRUD + 版本管理 + 聊天持久化（Blob）      │
-│ /scrape   — URL 内容提取（browser_fetch 工具）             │
-│ /stop     — 取消正在进行的研究                             │
-│ /health   — 健康检查                                       │
-└────────────────────────────────────────────────────────────┘
-```
+- **人机协同规划** — AI 将问题分解为子问题，用户在研究执行前进行审阅、编辑与确认。
+- **双源搜索** — 查询 CrossRef + Semantic Scholar 获取学术论文，同时通过实时网页搜索获取新闻与文章。
+- **自动续写** — 检测报告是否缺失结论或参考文献，自动最多续写 15 次直至完整。
+- **增量编辑** — 跟进研究加载已有报告，仅修改用户指定部分，保留原有结构。
+- **项目与版本管理** — 研究项目、报告版本与跟进对话历史均持久化到 Blob 存储。
 
-## 研究流程
-
-```
-1. 用户输入研究问题 + 选择深度（快速/标准/深度）
-2. POST /research (decomposeOnly=true) → 生成子问题
-3. 前端展示 SubQuestionConfirm → 用户编辑/确认
-4. POST /research (confirmedSubQuestions=[...]) → 正式研究
-5. Agent 调用 search_literature（CrossRef + Semantic Scholar）
-6. Agent 调用 search_web（web_search 工具 + 降级策略）
-7. Agent 撰写报告（SSE 流式推送）
-8. 如报告不完整，自动续写（检查是否有结论 + 参考文献）
-9. 结构检查：移除重复章节，修复格式
-10. 前端保存版本到 /project → 版本列表更新
-11. 用户通过 FollowUpChat 继续研究（聊天记录持久化到 Blob）
-```
-
-## 使用的 EdgeOne Makers 平台能力
-
-| 能力 | 用途 |
-|------|------|
-| `context.tools.get('web_search')` | 内置网页搜索工具（首选策略） |
-| `context.tools.get('browser_fetch')` | 使用真实 Chromium 抓取 URL |
-| `context.sandbox.commands.run()` | Shell 命令执行（curl 搜索降级） |
-| `@edgeone/pages-blob` | 项目存储、版本管理、聊天记录持久化 |
-| 云函数 (`agents/` 目录) | 每个 .ts 文件自动映射为 HTTP 端点 |
-| AI Gateway | 通过 `@makers/deepseek-v4-flash` 访问大模型 |
-
-## 快速开始
-
-```bash
-# 安装依赖
-npm install
-
-# 复制环境变量
-cp .env.example .env
-# 编辑 .env，填入 AI Gateway 凭证
-
-# 启动开发
-edgeone makes dev
-
-# 修改 agent 文件后需要强制重建：
-rm -rf .edgeone/agent-node && edgeone makes dev
-```
-
-## 环境变量
+## Environment Variables
 
 | 变量 | 必填 | 说明 |
-|------|------|------|
-| `AI_GATEWAY_API_KEY` | 是 | AI Gateway API 密钥 |
-| `AI_GATEWAY_BASE_URL` | 是 | AI Gateway 基础 URL |
+|----------|----------|-------------|
+| `AI_GATEWAY_API_KEY` | 是 | 模型网关 API Key。使用 Makers Models 的 API Key，或任何兼容 OpenAI 协议的提供商 Key。 |
+| `AI_GATEWAY_BASE_URL` | 是 | 网关基础地址。使用 Makers Models 时填写 `https://ai-gateway.edgeone.link/v1`。 |
+| `AI_GATEWAY_MODEL` | 否 | 模型 ID。模板硬编码为 `@makers/deepseek-v4-flash`。 |
+| `SANDBOX_API_BASE` | 否 | 沙箱 HTTP API 基础地址，用作网页抓取的降级方案。 |
 
-> 注意：`PROJECT_ID` 和 `EDGEONE_PAGES_API_TOKEN` 在部署时自动注入。本地开发如需 Blob 持久化，需手动在 `.env` 中配置。未配置时应用仍可正常使用，但项目和聊天记录不会持久保存（会显示警告提示）。
+本模板遵循 OpenAI 兼容标准 —— 可指向 Makers Models 或任何兼容提供商。
+
+### 如何获取 AI_GATEWAY_API_KEY
+
+1. 打开 Makers 控制台（https://console.cloud.tencent.com/edgeone/makers）
+2. 登录并启用 Makers
+3. 进入 Makers → Models → API Key，创建 Key
+4. 将其填入 `AI_GATEWAY_API_KEY`
+
+> 内置模型在额度内免费，适合验证；生产环境请绑定自费厂商 Key（BYOK）。
+
+## 本地开发
+
+**前置依赖**
+- Node.js 18+
+- EdgeOne CLI（`npm i -g @edgeone/cli`）
+
+```bash
+npm install
+cp .env.example .env
+# 编辑 .env，填入 AI_GATEWAY_API_KEY 与 AI_GATEWAY_BASE_URL
+edgeone makers dev
+```
+
+本地可观测面板地址：http://localhost:8080/agent-metrics。
 
 ## 项目结构
 
 ```
 deep-research-edgeone/
 ├── agents/
-│   ├── _shared.ts        # 模型/Provider 初始化、SSE 工具、safeFetch、沙箱工具
-│   ├── research.ts       # 主研究 Agent（分解 + 搜索 + 综合 + 续写 + 结构检查）
-│   ├── chat.ts           # 继续研究对话 Agent（轻量，无工具）
-│   ├── project.ts        # 项目 CRUD + 版本管理 + 聊天持久化（Blob）
-│   ├── scrape.ts         # URL 抓取（browser_fetch + safeFetch 降级）
-│   ├── stop.ts           # 取消研究
-│   └── health.ts         # 健康检查
-├── app/
-│   ├── page.tsx          # 主页面（状态管理、SSE 消费、两阶段流程）
-│   ├── layout.tsx
-│   ├── globals.css       # Tailwind + prose-research 样式（表格、代码块）
-│   └── components/
-│       ├── research-form.tsx        # 问题输入 + 深度选择
-│       ├── sub-question-confirm.tsx # 人机协作可编辑子问题列表
-│       ├── progress-tree.tsx        # 阶段生命周期 + 可折叠子问题
-│       ├── sources-panel.tsx        # 学术/网页来源分页
-│       ├── source-card.tsx          # 单条来源展示
-│       ├── report-view.tsx          # 流式 Markdown 渲染（remark-gfm）
-│       ├── follow-up-chat.tsx       # 聊天 + 重新生成 + 添加文献 + Blob 持久化
-│       ├── project-selector.tsx     # 固定侧边栏项目列表
-│       ├── version-selector.tsx     # 版本历史 + 对比
-│       └── diff-view.tsx            # 并排版本差异
-├── components/ui/         # 共享 UI 组件（Card、Button、Tabs 等）
+│   ├── _shared.ts          # 模型 / Provider 初始化、SSE 辅助函数、safeFetch、沙箱工具
+│   ├── _tools.ts           # 工具工厂（分解、学术、网页、抓取）
+│   ├── _prompts.ts         # 系统提示构建器 + ResearchOptions
+│   ├── _sources.ts         # 论文 / 文章类型与学术 API 解析器
+│   ├── _web-search.ts      # 多引擎降级搜索
+│   ├── _project-store.ts   # 版本持久化辅助函数
+│   ├── _follow-up.ts       # 跟进编辑流（无搜索路径）
+│   ├── _report-cleanup.ts  # 生成后结构清理
+│   ├── research.ts         # POST /research —— 主研究流水线
+│   ├── chat.ts             # POST /chat —— 跟进对话
+│   ├── scrape.ts           # POST /scrape —— URL 内容提取
+│   └── stop.ts             # POST /stop —— 取消活跃研究
+├── cloud-functions/
+│   ├── project/            # POST /project —— 项目增删改查 + 版本
+│   ├── enrich-doi/         # POST /enrich-doi —— DOI 元数据丰富
+│   └── health/             # GET /health
+├── app/                    # Next.js App Router 前端
+├── components/             # UI 组件（报告视图、对话、版本对比等）
 ├── lib/
-│   ├── i18n.tsx          # 中英文翻译
+│   ├── i18n.tsx            # 中 / 英翻译
 │   └── utils.ts
-├── .env.example
-└── package.json
+└── edgeone.json            # EdgeOne 部署配置
 ```
 
-## 开发注意事项
+以 `_` 为前缀的文件是私有模块，不会作为公共路由暴露。
 
-- **Agent 重建**：修改 `agents/` 文件后执行 `rm -rf .edgeone/agent-node && edgeone makes dev`
-- **模型**：使用 `@makers/deepseek-v4-flash`（写死）。该模型可能每次只输出 ~300 token，自动续写循环会处理这个问题。
-- **网页搜索**：首选内置 `web_search` 工具，降级到 curl Bing/DuckDuckGo，最终降级到 mock 数据。
-- **Blob 不可用**：未配置 `PROJECT_ID`/`EDGEONE_PAGES_API_TOKEN` 时显示黄色警告条。应用仍可正常使用，但项目和聊天记录不持久化。
-- **增量编辑**：继续研究时发送完整旧报告给模型，指示仅修改用户要求的部分。
-- **结构检查**：报告生成后自动移除重复的结论/参考文献章节。
+## 工作原理
 
-## 部署
+### 运行模式
+`agents/` 下的文件以**会话模式**运行：相同 `conversation_id` 的请求会被粘性路由到同一 Agent 实例。`/research` Agent 通过 `context.store.openaiSession(conversationId)` 跨轮次持久化对话历史。
 
-```bash
-edgeone makes deploy
-```
+### 端到端流程
 
-部署后所有平台能力（Blob、Sandbox、Tools、AI Gateway）自动可用。
+1. **输入问题** —— 用户输入研究问题并选择深度（`quick` / `standard` / `deep`）。
+2. **子问题分解** —— 前端调用 `/research` 并传入 `decomposeOnly=true`。专用子 Agent 生成聚焦子问题。
+3. **人工确认** —— 前端展示可编辑的子问题列表；用户确认或修改。
+4. **完整研究** —— 前端再次调用 `/research` 并传入 `confirmedSubQuestions`。主 Agent 依次执行：
+   - `decompose_question` —— 将子问题列表形式化。
+   - `search_literature` —— 查询 CrossRef 与 Semantic Scholar 获取学术论文。
+   - `search_web` —— 使用内置 `web_search` 工具（带沙箱 curl 降级）。
+   - `scrape_urls` —— 当提供用户指定 URL 时提取其内容。
+5. **综合撰写** —— 所有工具输出收集完毕后，综合 Agent 通过 SSE 流式输出 Markdown 报告。
+6. **自动续写** —— 若报告缺少结论或参考文献章节，续写 Agent 从断点处继续（最多 15 次）。
+7. **结构清理** —— 自动移除重复章节、泄漏的思维标签与格式问题。
+8. **持久化** —— 最终报告、来源与元数据通过 `context.store` 保存到 Blob（或降级到 `/project` 云函数）。
+9. **跟进对话** —— 用户通过 `/chat` 讨论报告；当达成修改共识后，前端触发跟进研究运行，在原位编辑已有报告。
+
+### 关键路由与参数
+- `/research` —— 请求体：`{ message/question, depth, projectId, urls, confirmedSubQuestions, decomposeOnly, locale, citationStyle }`。
+- `/chat` —— 请求体：`{ message, chatHistory, report }`。轻量级对话端点，无搜索工具。
+- `/scrape` —— 请求体：`{ urls }`。使用 `browser_fetch` 或沙箱 curl 提取 URL 内容。
+- `/project` —— 请求体因动作而异。处理项目增删改查、版本列表与对话历史持久化。
+- `/stop` —— 请求体：`{ conversationId }`。取消活跃研究运行。
+
+### 运行参数
+- `agents.timeout`：300 秒
+
+## 相关资源
+
+- [Makers Agents 文档](https://edgeone.ai/makers)
+- [Makers 快速开始](https://edgeone.ai/makers/docs/quickstart)
+- [Makers Models](https://console.cloud.tencent.com/edgeone/makers/models)
 
 ## 许可证
 

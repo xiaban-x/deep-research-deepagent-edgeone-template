@@ -10,6 +10,17 @@ const DEPTH_OPTIONS = [
   { value: 'deep', labelKey: 'deep' as const, description: '' },
 ];
 
+// Academic citation styles. The model gets style-specific instructions in
+// the system prompt — see _prompts.ts buildSystemPrompt's citationStyle block.
+const CITATION_STYLES = [
+  { value: 'apa', label: 'APA' },
+  { value: 'mla', label: 'MLA' },
+  { value: 'chicago', label: 'Chicago' },
+  { value: 'gb7714', label: 'GB/T 7714' },
+] as const;
+
+export type CitationStyle = (typeof CITATION_STYLES)[number]['value'];
+
 interface HistoryItem {
   id: string;
   question: string;
@@ -18,7 +29,7 @@ interface HistoryItem {
 }
 
 interface ResearchFormProps {
-  onSubmit: (question: string, depth: string) => void;
+  onSubmit: (question: string, depth: string, citationStyle: CitationStyle) => void;
   isLoading: boolean;
   history?: HistoryItem[];
   onLoadReport?: (id: string) => void;
@@ -28,13 +39,14 @@ export function ResearchForm({ onSubmit, isLoading, history = [], onLoadReport }
   const { t } = useI18n();
   const [question, setQuestion] = useState('');
   const [depth, setDepth] = useState('standard');
+  const [citationStyle, setCitationStyle] = useState<CitationStyle>('apa');
   const [showHistory, setShowHistory] = useState(false);
   const examplePrompts = t.examplePrompts;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!question.trim() || isLoading) return;
-    onSubmit(question.trim(), depth);
+    onSubmit(question.trim(), depth, citationStyle);
   };
 
   const formatDate = (dateStr: string) => {
@@ -76,6 +88,24 @@ export function ResearchForm({ onSubmit, isLoading, history = [], onLoadReport }
                   {opt.description && <span className="ml-1 text-xs text-neutral-400 dark:text-neutral-500">{opt.description}</span>}
                 </button>
               ))}
+            </div>
+
+            {/* Citation style — academic differentiator */}
+            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-800">
+              <svg className="w-3.5 h-3.5 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              <select
+                value={citationStyle}
+                onChange={(e) => setCitationStyle(e.target.value as CitationStyle)}
+                disabled={isLoading}
+                title={t.citationStyleLabel}
+                className="bg-transparent text-xs font-medium text-neutral-700 dark:text-neutral-300 focus:outline-none cursor-pointer disabled:opacity-50"
+              >
+                {CITATION_STYLES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
             </div>
 
             {/* History button */}

@@ -109,3 +109,66 @@
 .animate-pulse-dot {
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
+
+/* Respect reduced-motion preferences and avoid animation churn during heavy
+   SSE update bursts that already cause layout work. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-dot {
+    animation: none;
+  }
+}
+
+/* ── Inline citation markers ────────────────────────────────────────────── */
+/* Citation links in the report body: hover preview + click-to-jump to the
+   matching source card in the SourcesPanel. */
+.citation-link {
+  @apply inline-flex items-center text-blue-600 dark:text-blue-400 no-underline font-medium tabular-nums px-0.5 rounded transition-colors;
+  cursor: pointer;
+}
+.citation-link:hover {
+  @apply bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 underline decoration-dotted;
+}
+
+/* Ghost citations: numbers in the report that don't map to any source.
+   Render in red so the reader (and the citation-coverage panel) sees them. */
+.citation-ghost {
+  @apply inline-flex items-center text-red-600 dark:text-red-400 font-medium tabular-nums px-0.5 rounded;
+  cursor: help;
+  text-decoration: underline wavy;
+  text-decoration-thickness: 1px;
+}
+
+/* Flash highlight on the target source-card when [N] is clicked. The card is
+   often already visible in the viewport (the sources panel is `sticky`), so
+   this flash IS the primary feedback that the click registered — make it
+   strong enough to actually be seen. Solid yellow ring + amber background +
+   brief scale "thump", then fade back to neutral. */
+@keyframes source-flash {
+  0%   {
+    background-color: rgba(250, 204, 21, 0.55);
+    box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.85), 0 0 18px 4px rgba(250, 204, 21, 0.45);
+    transform: scale(1.015);
+  }
+  35% {
+    background-color: rgba(250, 204, 21, 0.35);
+    box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.6), 0 0 14px 3px rgba(250, 204, 21, 0.3);
+    transform: scale(1);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+    transform: scale(1);
+  }
+}
+.source-flash {
+  animation: source-flash 1.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .source-flash {
+    animation: none;
+    /* Still give a non-animated visual ping so the user sees the jump landed. */
+    outline: 2px solid rgba(250, 204, 21, 0.9);
+    outline-offset: 2px;
+  }
+}
