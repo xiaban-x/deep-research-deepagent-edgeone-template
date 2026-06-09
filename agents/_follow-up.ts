@@ -80,7 +80,7 @@ export async function* streamFollowUpEdit(
   const editorAgent = new Agent({
     name: 'report-editor',
     instructions: buildEditorSystemPrompt(isEnglish),
-    model: getModel(),
+    model: getModel(context.env),
     tools: [],
     modelSettings: { maxTokens: 65536 },
   });

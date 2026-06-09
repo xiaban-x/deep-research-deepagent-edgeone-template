@@ -79,14 +79,15 @@ async function* streamChat(
   message: string,
   chatHistory: ChatMessage[],
   report: string,
+  env: Record<string, string | undefined>,
   signal?: AbortSignal
 ): AsyncGenerator<string> {
-  ensureProvider();
+  ensureProvider(env);
 
   const agent = new Agent({
     name: "research-chat",
     instructions: buildChatSystemPrompt(report),
-    model: getModel(),
+    model: getModel(env),
     tools: [],
     modelSettings: {
       maxTokens: 4096,
@@ -193,6 +194,6 @@ export async function onRequest(context: any) {
   }
 
   const signal = request?.signal as AbortSignal | undefined;
-  const generator = streamChat(message, chatHistory, report, signal);
+  const generator = streamChat(message, chatHistory, report, context.env ?? {}, signal);
   return createSSEResponse(generator, signal);
 }

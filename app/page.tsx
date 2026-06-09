@@ -321,14 +321,16 @@ export default function Home() {
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
     setIsResearching(false);
-    // Notify backend to cancel the active run
+    // Notify backend to cancel the active run.
+    // ⚠️ Do NOT send `makers-conversation-id` Header here — it would sticky-route
+    // /stop to the busy chat instance, preventing abortActiveRun from reaching
+    // the runner. The conversation_id MUST be passed via body only.
     fetch("/stop", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "makers-conversation-id": conversationId,
       },
-      body: JSON.stringify({ conversationId }),
+      body: JSON.stringify({ conversation_id: conversationId }),
     }).catch(() => {});
   }, [conversationId]);
 

@@ -2,9 +2,6 @@
  * Shared utilities for deep-research agent (OpenAI Agents SDK).
  */
 
-// Disable OpenAI Agents tracing (we use EdgeOne's own observability)
-process.env.OPENAI_AGENTS_DISABLE_TRACING = 'true';
-
 import {
   Agent,
   run,
@@ -12,6 +9,7 @@ import {
   OpenAIChatCompletionsModel,
   OpenAIProvider,
   setDefaultModelProvider,
+  setTracingDisabled,
 } from "@openai/agents";
 import OpenAI from "openai";
 
@@ -21,20 +19,40 @@ export {
   tool,
 };
 
+// Disable OpenAI Agents tracing once at module load (we use EdgeOne's own
+// observability). Use the SDK's official API rather than mutating
+// `process.env.OPENAI_AGENTS_DISABLE_TRACING` — agents/ handlers are forbidden
+// from touching process.env (skill rule #3).
+setTracingDisabled(true);
+
 // ─── Model & Provider ────────────────────────────────────────────────────────
 
-function createOpenAIClient(): OpenAI {
+type EnvLike = Record<string, string | undefined>;
+
+function readGatewayEnv(env: EnvLike): { apiKey: string; baseURL: string } {
+  const apiKey = env.AI_GATEWAY_API_KEY?.trim();
+  const baseURL = env.AI_GATEWAY_BASE_URL?.trim();
+  if (!apiKey || !baseURL) {
+    throw new Error(
+      "Missing AI_GATEWAY_API_KEY or AI_GATEWAY_BASE_URL in context.env",
+    );
+  }
+  return { apiKey, baseURL };
+}
+
+function createOpenAIClient(env: EnvLike): OpenAI {
+  const { apiKey, baseURL } = readGatewayEnv(env);
   return new OpenAI({
-    apiKey: process.env.AI_GATEWAY_API_KEY!,
-    baseURL: process.env.AI_GATEWAY_BASE_URL!,
+    apiKey,
+    baseURL,
     defaultHeaders: {
       "X-Gateway-Timeout": "600",
     },
   });
 }
 
-export function getModel(): OpenAIChatCompletionsModel {
-  const client = createOpenAIClient();
+export function getModel(env: EnvLike): OpenAIChatCompletionsModel {
+  const client = createOpenAIClient(env);
   return new OpenAIChatCompletionsModel(
     client,
     "@makers/deepseek-v4-flash",
@@ -42,9 +60,9 @@ export function getModel(): OpenAIChatCompletionsModel {
 }
 
 let providerInitialized = false;
-export function ensureProvider() {
+export function ensureProvider(env: EnvLike) {
   if (providerInitialized) return;
-  const client = createOpenAIClient();
+  const client = createOpenAIClient(env);
   setDefaultModelProvider(new OpenAIProvider({
     openAIClient: client,
     useResponses: false,
@@ -178,8 +196,9 @@ async function sandboxExec(
     sandboxLogger.log("sandbox.commands.run failed:", e.message);
   }
 
-  // Fallback: call sandbox HTTP API directly
-  const baseUrl = process.env.SANDBOX_API_BASE || process.env.SANDBOX_BASE_URL;
+  // Fallback: call sandbox HTTP API directly (env injected via context.env)
+  const ctxEnv = (context?.env ?? {}) as EnvLike;
+  const baseUrl = ctxEnv.SANDBOX_API_BASE || ctxEnv.SANDBOX_BASE_URL;
   const conversationId = context?.conversation_id;
   if (!baseUrl) return null;
 

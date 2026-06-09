@@ -42,10 +42,8 @@ import { cleanReportStructure, stripStreamPreamble, validateCitations } from './
 
 const logger = createLogger('research');
 
-// Disable OpenAI tracing (we use EdgeOne's own observability)
-if (!process.env.OPENAI_AGENTS_DISABLE_TRACING) {
-  process.env.OPENAI_AGENTS_DISABLE_TRACING = 'true';
-}
+// Tracing is disabled centrally in _shared.ts via setTracingDisabled(true);
+// agents/ handlers must NOT mutate process.env (skill rule #3).
 
 // ─── Stream ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +53,7 @@ async function* streamResearch(
   context: any,
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
-  ensureProvider();
+  ensureProvider(context.env);
 
   // Build per-request tool instances with this request's context closed over.
   const { decomposeQuestion, searchLiterature, searchWeb, scrapeUrls } = buildResearchTools(context);
@@ -87,7 +85,7 @@ Generate ${depth === 'quick' ? '2-3' : depth === 'deep' ? '5-7' : '3-5'} sub-que
 - Future directions and applications
 Write sub-questions in the same language as the input question.
 Call the decompose_question tool with your generated sub-questions.`,
-      model: getModel(),
+      model: getModel(context.env),
       tools: [decomposeQuestion],
       modelSettings: { maxTokens: 2048 },
     });
@@ -154,7 +152,7 @@ Call the decompose_question tool with your generated sub-questions.`,
   const agent = new Agent({
     name: 'deep-research',
     instructions: buildSystemPrompt(opts),
-    model: getModel(),
+    model: getModel(context.env),
     tools,
     modelSettings: { maxTokens: 65536 },
   });
@@ -374,7 +372,7 @@ Call the decompose_question tool with your generated sub-questions.`,
       const continueAgent = new Agent({
         name: 'report-continuator',
         instructions: `You are continuing an incomplete research report. The previous output was cut short. Continue writing from EXACTLY where it left off — do NOT add any prefix, greeting, or "continued from" note. Do NOT repeat any content that already exists. Complete ALL remaining sections following this exact structure: main body chapters → ## 结论 (or ## Conclusion). Do NOT write a references / 参考文献 section — the application generates it automatically. Keep all inline [n] citation numbers as-is; do NOT invent new numbers. Write in the same language as the existing content. Output ONLY the continuation text. Write as MUCH content as possible — aim for at least 2000 characters.`,
-        model: getModel(),
+        model: getModel(context.env),
         tools: [],
         modelSettings: { maxTokens: 65536 },
       });
